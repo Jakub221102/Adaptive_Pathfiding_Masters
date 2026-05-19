@@ -9,9 +9,8 @@ def main() -> None:
     config = ExperimentConfig(
         map_path=Path("Data/bg512-map/AR0204SR.map"),
         scen_path=Path("Data/bg512-scen/AR0204SR.map.scen"),
-        algorithm=AlgorithmName.HPA_STAR,
+        algorithm=AlgorithmName.ASTAR,
         viewer_mode = ViewerMode.STATIC,
-        show_cluster_overlay=True,
         scenario_index=400,
         min_optimal_length=100,
         fps=120,

@@ -45,8 +45,6 @@ class PygameViewerConfig(BaseModel):
     fps: int = Field(default=60, gt=0)
     draw_grid: bool = False
     window_title: str = "Pathfinding Viewer"
-    show_cluster_overlay: bool = False
-    cluster_size: int = 32
 
 
 class AlgorithmStep(BaseModel):
@@ -60,6 +58,15 @@ class ViewerMode(str, Enum):
     ANIMATED = "animated"
 
 class NamedPath(BaseModel):
+    name: str
+    path: list[Position]
+    color: RGBColor
+
+class Viewport(BaseModel):
+    x_offset: int
+    width: int
+
+class AlgorithmVisualization(BaseModel):
     name: str
     path: list[Position]
     color: RGBColor

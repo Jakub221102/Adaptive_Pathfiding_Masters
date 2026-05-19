@@ -4,6 +4,8 @@ from src.loaders.map_loader import load_moving_ai_map
 from src.loaders.scen_loader import load_moving_ai_scenarios
 from src.visualization.pygame_models import PygameViewerConfig, ViewerMode
 from src.visualization.pygame_viewer import PygameGridViewer
+from src.visualization.overlays.cluster_overlay import ClusterOverlay
+from src.visualization.overlays.performance_overlay import PerformanceOverlay
 
 
 class PathfindingExperiment:
@@ -37,10 +39,19 @@ class PathfindingExperiment:
             config=PygameViewerConfig(
                 fps=self.config.fps,
                 draw_grid=False,
-                show_cluster_overlay=self.config.show_cluster_overlay,
                 window_title=f"{self.config.algorithm.value} on {grid_map.name}",
             ),
         )
+        if self.config.show_cluster_overlay:
+            viewer.add_overlay(
+                ClusterOverlay(
+                    grid_map=grid_map,
+                    cell_size=viewer.cell_size,
+                    cluster_size=self.config.cluster_size,
+                    window_width=viewer.window_width,
+                    window_height=viewer.window_height,
+                )
+            )
 
         if self.config.viewer_mode == ViewerMode.ANIMATED:
             result, steps = algorithm.find_path_with_steps(
@@ -50,7 +61,9 @@ class PathfindingExperiment:
                 step_record_interval=self.config.step_record_interval,
             )
 
-            # print(result.model_dump_json(indent=2))
+            viewer.add_overlay(
+                PerformanceOverlay(result=result)
+            )
 
             viewer.run_algorithm_animation(
                 start=scenario.start,
@@ -67,7 +80,9 @@ class PathfindingExperiment:
                 goal=scenario.goal,
             )
 
-            # print(result.model_dump_json(indent=2))
+            viewer.add_overlay(
+                PerformanceOverlay(result=result)
+            )
 
             viewer.run_static_path_view(
                 start=scenario.start,
