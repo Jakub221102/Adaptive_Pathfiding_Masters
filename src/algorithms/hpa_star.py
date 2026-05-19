@@ -1,7 +1,8 @@
-from src.algorithms.base import PathfindingAlgorithm
+import heapq
+import time
+
 from src.algorithms.astar import AStar
-from src.core.models import GridMap, PathfindingResult, Position
-from src.core.trace import RawAlgorithmStep
+from src.algorithms.base import PathfindingAlgorithm
 from src.core.hpa_models import (
     AbstractEdge,
     AbstractGraph,
@@ -9,6 +10,9 @@ from src.core.hpa_models import (
     Cluster,
     Entrance,
 )
+from src.core.models import GridMap, PathfindingResult, Position
+from src.core.trace import RawAlgorithmStep
+
 
 class HPAStar(PathfindingAlgorithm):
     name = "HPA*"
@@ -17,43 +21,87 @@ class HPAStar(PathfindingAlgorithm):
         self.cluster_size = cluster_size
         self._fallback_astar = AStar()
 
-    def find_path(
-            self,
-            grid_map: GridMap,
-            start: Position,
-            goal: Position,
-    ) -> PathfindingResult:
-        start_time = __import__("time").perf_counter()
+        self._preprocessed_map_name: str | None = None
+        self._clusters: list[Cluster] = []
+        self._entrances: list[Entrance] = []
+        self._abstract_graph: AbstractGraph | None = None
 
-        clusters = self.build_clusters(grid_map)
-        entrances = self.detect_entrances(grid_map, clusters)
+        self._cluster_by_id: dict[int, Cluster] = {}
+        self._cluster_lookup: dict[tuple[int, int], Cluster] = {}
+        self._allowed_positions_by_cluster: dict[int, set[tuple[int, int]]] = {}
 
-        graph = self.build_abstract_graph(
+    def preprocess_map(self, grid_map: GridMap) -> None:
+        if self._preprocessed_map_name == grid_map.name:
+            return
+
+        self._clusters = self.build_clusters(grid_map)
+        self._cluster_by_id = {
+            cluster.id: cluster
+            for cluster in self._clusters
+        }
+
+        self._cluster_lookup = self._build_cluster_lookup(self._clusters)
+
+        self._allowed_positions_by_cluster = {
+            cluster.id: self._build_allowed_positions_for_cluster(cluster)
+            for cluster in self._clusters
+        }
+
+        self._entrances = self.detect_entrances(
             grid_map=grid_map,
-            entrances=entrances,
-            clusters=clusters,
+            clusters=self._clusters,
         )
 
-        start_cluster = self._find_cluster_for_position(start, clusters)
-        goal_cluster = self._find_cluster_for_position(goal, clusters)
+        self._abstract_graph = self.build_abstract_graph(
+            grid_map=grid_map,
+            entrances=self._entrances,
+            clusters=self._clusters,
+        )
+
+        self._preprocessed_map_name = grid_map.name
+
+    def find_path(
+        self,
+        grid_map: GridMap,
+        start: Position,
+        goal: Position,
+    ) -> PathfindingResult:
+        start_time = time.perf_counter()
+
+        self.preprocess_map(grid_map)
+
+        if self._abstract_graph is None:
+            return self._build_hpa_result(
+                path=[],
+                found=False,
+                visited_nodes=0,
+                start_time=start_time,
+            )
+
+        start_cluster = self._cluster_lookup.get((start.row, start.col))
+        goal_cluster = self._cluster_lookup.get((goal.row, goal.col))
 
         if start_cluster is None or goal_cluster is None:
-            return self._build_hpa_result([], False, 0, start_time)
+            return self._build_hpa_result(
+                path=[],
+                found=False,
+                visited_nodes=0,
+                start_time=start_time,
+            )
 
         if start_cluster.id == goal_cluster.id:
             result = self._fallback_astar.find_path(
                 grid_map=grid_map,
                 start=start,
                 goal=goal,
-                allowed_positions=self._build_allowed_positions_for_cluster(start_cluster),
+                allowed_positions=self._allowed_positions_by_cluster[start_cluster.id],
             )
             result.algorithm_name = self.name
             return result
 
-        graph, start_node, goal_node = self._insert_start_and_goal_nodes(
+        query_graph, start_node, goal_node = self._insert_start_and_goal_nodes(
             grid_map=grid_map,
-            graph=graph,
-            clusters=clusters,
+            graph=self._abstract_graph,
             start=start,
             goal=goal,
             start_cluster=start_cluster,
@@ -61,17 +109,21 @@ class HPAStar(PathfindingAlgorithm):
         )
 
         abstract_path = self.find_abstract_path(
-            graph=graph,
+            graph=query_graph,
             start_node_id=start_node.id,
             goal_node_id=goal_node.id,
         )
 
         if not abstract_path:
-            return self._build_hpa_result([], False, 0, start_time)
+            return self._build_hpa_result(
+                path=[],
+                found=False,
+                visited_nodes=0,
+                start_time=start_time,
+            )
 
         refined_path = self._refine_abstract_path(
             grid_map=grid_map,
-            clusters=clusters,
             abstract_path=abstract_path,
         )
 
@@ -89,13 +141,13 @@ class HPAStar(PathfindingAlgorithm):
         goal: Position,
         step_record_interval: int = 10,
     ) -> tuple[PathfindingResult, list[RawAlgorithmStep]]:
-        # Temporary fallback until full HPA* pathfinding is implemented.
-        return self._fallback_astar.find_path_with_steps(
+        result = self.find_path(
             grid_map=grid_map,
             start=start,
             goal=goal,
-            step_record_interval=step_record_interval,
         )
+
+        return result, []
 
     def build_clusters(self, grid_map: GridMap) -> list[Cluster]:
         clusters: list[Cluster] = []
@@ -122,7 +174,6 @@ class HPAStar(PathfindingAlgorithm):
         clusters: list[Cluster],
     ) -> list[Entrance]:
         entrances: list[Entrance] = []
-
         cluster_by_grid_position = self._build_cluster_lookup(clusters)
 
         for cluster in clusters:
@@ -145,10 +196,10 @@ class HPAStar(PathfindingAlgorithm):
         return entrances
 
     def build_abstract_graph(
-            self,
-            grid_map: GridMap,
-            entrances: list[Entrance],
-            clusters: list[Cluster],
+        self,
+        grid_map: GridMap,
+        entrances: list[Entrance],
+        clusters: list[Cluster],
     ) -> AbstractGraph:
         nodes: list[AbstractNode] = []
         edges: list[AbstractEdge] = []
@@ -202,10 +253,10 @@ class HPAStar(PathfindingAlgorithm):
         )
 
     def find_abstract_path(
-            self,
-            graph: AbstractGraph,
-            start_node_id: int,
-            goal_node_id: int,
+        self,
+        graph: AbstractGraph,
+        start_node_id: int,
+        goal_node_id: int,
     ) -> list[AbstractNode]:
         nodes_by_id = {
             node.id: node
@@ -224,9 +275,6 @@ class HPAStar(PathfindingAlgorithm):
         }
 
         counter = 0
-
-        import heapq
-
         heapq.heappush(open_heap, (0, counter, start_node_id))
 
         closed: set[int] = set()
@@ -256,7 +304,6 @@ class HPAStar(PathfindingAlgorithm):
                     g_score[neighbor_id] = tentative_g
 
                     counter += 1
-
                     priority = tentative_g + self._abstract_heuristic(
                         nodes_by_id[neighbor_id],
                         nodes_by_id[goal_node_id],
@@ -270,10 +317,10 @@ class HPAStar(PathfindingAlgorithm):
         return []
 
     def _build_intra_cluster_edges(
-            self,
-            grid_map: GridMap,
-            clusters: list[Cluster],
-            nodes: list[AbstractNode],
+        self,
+        grid_map: GridMap,
+        clusters: list[Cluster],
+        nodes: list[AbstractNode],
     ) -> list[AbstractEdge]:
         edges: list[AbstractEdge] = []
 
@@ -289,7 +336,10 @@ class HPAStar(PathfindingAlgorithm):
 
         for cluster_id, cluster_nodes in nodes_by_cluster.items():
             cluster = cluster_by_id[cluster_id]
-            allowed_positions = self._build_allowed_positions_for_cluster(cluster)
+            allowed_positions = self._allowed_positions_by_cluster.get(
+                cluster.id,
+                self._build_allowed_positions_for_cluster(cluster),
+            )
 
             for i in range(len(cluster_nodes)):
                 for j in range(i + 1, len(cluster_nodes)):
@@ -324,10 +374,10 @@ class HPAStar(PathfindingAlgorithm):
         return edges
 
     def _detect_horizontal_neighbor_entrance_groups(
-            self,
-            grid_map: GridMap,
-            cluster: Cluster,
-            cluster_by_grid_position: dict[tuple[int, int], Cluster],
+        self,
+        grid_map: GridMap,
+        cluster: Cluster,
+        cluster_by_grid_position: dict[tuple[int, int], Cluster],
     ) -> list[Entrance]:
         entrances: list[Entrance] = []
 
@@ -379,10 +429,10 @@ class HPAStar(PathfindingAlgorithm):
         return entrances
 
     def _detect_vertical_neighbor_entrance_groups(
-            self,
-            grid_map: GridMap,
-            cluster: Cluster,
-            cluster_by_grid_position: dict[tuple[int, int], Cluster],
+        self,
+        grid_map: GridMap,
+        cluster: Cluster,
+        cluster_by_grid_position: dict[tuple[int, int], Cluster],
     ) -> list[Entrance]:
         entrances: list[Entrance] = []
 
@@ -434,14 +484,13 @@ class HPAStar(PathfindingAlgorithm):
         return entrances
 
     def _insert_start_and_goal_nodes(
-            self,
-            grid_map: GridMap,
-            graph: AbstractGraph,
-            clusters: list[Cluster],
-            start: Position,
-            goal: Position,
-            start_cluster: Cluster,
-            goal_cluster: Cluster,
+        self,
+        grid_map: GridMap,
+        graph: AbstractGraph,
+        start: Position,
+        goal: Position,
+        start_cluster: Cluster,
+        goal_cluster: Cluster,
     ) -> tuple[AbstractGraph, AbstractNode, AbstractNode]:
         nodes = list(graph.nodes)
         edges = list(graph.edges)
@@ -482,19 +531,22 @@ class HPAStar(PathfindingAlgorithm):
         return AbstractGraph(nodes=nodes, edges=edges), start_node, goal_node
 
     def _connect_node_to_cluster_nodes(
-            self,
-            grid_map: GridMap,
-            node: AbstractNode,
-            cluster: Cluster,
-            nodes: list[AbstractNode],
-            edges: list[AbstractEdge],
+        self,
+        grid_map: GridMap,
+        node: AbstractNode,
+        cluster: Cluster,
+        nodes: list[AbstractNode],
+        edges: list[AbstractEdge],
     ) -> None:
-        allowed_positions = self._build_allowed_positions_for_cluster(cluster)
+        allowed_positions = self._allowed_positions_by_cluster.get(
+            cluster.id,
+            self._build_allowed_positions_for_cluster(cluster),
+        )
 
         cluster_nodes = [
             other_node for other_node in nodes
             if other_node.cluster_id == cluster.id
-               and other_node.id != node.id
+            and other_node.id != node.id
         ]
 
         for other_node in cluster_nodes:
@@ -524,10 +576,9 @@ class HPAStar(PathfindingAlgorithm):
             )
 
     def _refine_abstract_path(
-            self,
-            grid_map: GridMap,
-            clusters: list[Cluster],
-            abstract_path: list[AbstractNode],
+        self,
+        grid_map: GridMap,
+        abstract_path: list[AbstractNode],
     ) -> list[Position]:
         if len(abstract_path) < 2:
             return []
@@ -538,23 +589,20 @@ class HPAStar(PathfindingAlgorithm):
             current_node = abstract_path[index]
             next_node = abstract_path[index + 1]
 
-            current_cluster = self._find_cluster_for_position(
-                current_node.position,
-                clusters,
+            current_cluster = self._cluster_lookup.get(
+                (current_node.position.row, current_node.position.col)
             )
-
-            next_cluster = self._find_cluster_for_position(
-                next_node.position,
-                clusters,
+            next_cluster = self._cluster_lookup.get(
+                (next_node.position.row, next_node.position.col)
             )
 
             if current_cluster is None or next_cluster is None:
                 return []
 
             if current_cluster.id == next_cluster.id:
-                allowed_positions = self._build_allowed_positions_for_cluster(
-                    current_cluster
-                )
+                allowed_positions = self._allowed_positions_by_cluster[
+                    current_cluster.id
+                ]
             else:
                 allowed_positions = None
 
@@ -578,14 +626,12 @@ class HPAStar(PathfindingAlgorithm):
         return full_path
 
     def _build_hpa_result(
-            self,
-            path: list[Position],
-            found: bool,
-            visited_nodes: int,
-            start_time: float,
+        self,
+        path: list[Position],
+        found: bool,
+        visited_nodes: int,
+        start_time: float,
     ) -> PathfindingResult:
-        import time
-
         end_time = time.perf_counter()
 
         return PathfindingResult(
@@ -598,31 +644,10 @@ class HPAStar(PathfindingAlgorithm):
         )
 
     @staticmethod
-    def _build_allowed_positions_for_cluster(
-            cluster: Cluster,
-    ) -> set[tuple[int, int]]:
-        return {
-            (row, col)
-            for row in range(cluster.row_start, cluster.row_end)
-            for col in range(cluster.col_start, cluster.col_end)
-        }
-
-    @staticmethod
-    def _find_cluster_for_position(
-            position: Position,
-            clusters: list[Cluster],
-    ) -> Cluster | None:
-        for cluster in clusters:
-            if cluster.contains(position):
-                return cluster
-
-        return None
-
-    @staticmethod
     def _reconstruct_abstract_path(
-            came_from: dict[int, int],
-            current_id: int,
-            nodes_by_id: dict[int, AbstractNode],
+        came_from: dict[int, int],
+        current_id: int,
+        nodes_by_id: dict[int, AbstractNode],
     ) -> list[AbstractNode]:
         path = [nodes_by_id[current_id]]
 
@@ -635,17 +660,17 @@ class HPAStar(PathfindingAlgorithm):
 
     @staticmethod
     def _abstract_heuristic(
-            current: AbstractNode,
-            goal: AbstractNode,
+        current: AbstractNode,
+        goal: AbstractNode,
     ) -> float:
         return (
-                abs(current.position.row - goal.position.row)
-                + abs(current.position.col - goal.position.col)
+            abs(current.position.row - goal.position.row)
+            + abs(current.position.col - goal.position.col)
         )
 
     @staticmethod
     def _build_allowed_positions_for_cluster(
-            cluster: Cluster,
+        cluster: Cluster,
     ) -> set[tuple[int, int]]:
         return {
             (row, col)
@@ -668,11 +693,11 @@ class HPAStar(PathfindingAlgorithm):
 
     @staticmethod
     def _add_horizontal_group_entrance(
-            entrances: list[Entrance],
-            group: list[tuple[int, Cluster]],
-            cluster: Cluster,
-            left_col: int,
-            right_col: int,
+        entrances: list[Entrance],
+        group: list[tuple[int, Cluster]],
+        cluster: Cluster,
+        left_col: int,
+        right_col: int,
     ) -> None:
         if not group:
             return
@@ -691,11 +716,11 @@ class HPAStar(PathfindingAlgorithm):
 
     @staticmethod
     def _add_vertical_group_entrance(
-            entrances: list[Entrance],
-            group: list[tuple[int, Cluster]],
-            cluster: Cluster,
-            top_row: int,
-            bottom_row: int,
+        entrances: list[Entrance],
+        group: list[tuple[int, Cluster]],
+        cluster: Cluster,
+        top_row: int,
+        bottom_row: int,
     ) -> None:
         if not group:
             return
