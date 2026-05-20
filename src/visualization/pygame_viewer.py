@@ -1,4 +1,5 @@
 import pygame
+from typing import TypeAlias
 
 from src.core.models import GridMap, Position
 from src.core.trace import RawAlgorithmStep
@@ -12,10 +13,12 @@ from src.visualization.pygame_models import (
 )
 
 
-GridNodeCollection = (
-    frozenset[tuple[int, int]]
-    | set[tuple[int, int]]
-    | tuple[tuple[int, int], ...]
+GridNode: TypeAlias = tuple[int, int]
+
+GridNodeCollection: TypeAlias = (
+    frozenset[GridNode]
+    | set[GridNode]
+    | tuple[GridNode, ...]
 )
 
 
@@ -52,10 +55,13 @@ class PygameGridViewer:
         while running:
             running = self._handle_events()
 
-            self._draw_base_map()
-            self._draw_path(path)
-            self._draw_special_marker(start, CellState.START)
-            self._draw_special_marker(goal, CellState.GOAL)
+            if self.screen is None:
+                return
+
+            self._draw_base_map(self.screen)
+            self._draw_path(self.screen, path)
+            self._draw_special_marker(self.screen, start, CellState.START)
+            self._draw_special_marker(self.screen, goal, CellState.GOAL)
             self._draw_overlays()
 
             self._finalize_frame()
@@ -83,6 +89,9 @@ class PygameGridViewer:
         while running:
             running = self._handle_events()
 
+            if self.screen is None:
+                return
+
             now = pygame.time.get_ticks()
 
             if step_index < len(steps) - 1 and now - last_step_time >= step_delay_ms:
@@ -91,20 +100,25 @@ class PygameGridViewer:
 
             current_step = steps[step_index]
 
-            self._draw_base_map()
-            self._draw_nodes(current_step.closed_nodes, CellState.CLOSED)
-            self._draw_nodes(current_step.open_nodes, CellState.OPEN)
+            self._draw_base_map(self.screen)
+            self._draw_nodes(self.screen, current_step.closed_nodes, CellState.CLOSED)
+            self._draw_nodes(self.screen, current_step.open_nodes, CellState.OPEN)
 
             if current_step.current is not None:
                 row, col = current_step.current
-                self._draw_cell_by_coordinates(row, col, CellState.CURRENT)
+                self._draw_cell_by_coordinates(
+                    self.screen,
+                    row,
+                    col,
+                    CellState.CURRENT,
+                )
 
             if current_step.path:
-                self._draw_path(current_step.path)
+                self._draw_path(self.screen, current_step.path)
 
             self._draw_overlays()
-            self._draw_special_marker(start, CellState.START)
-            self._draw_special_marker(goal, CellState.GOAL)
+            self._draw_special_marker(self.screen, start, CellState.START)
+            self._draw_special_marker(self.screen, goal, CellState.GOAL)
 
             self._finalize_frame()
 
@@ -123,37 +137,46 @@ class PygameGridViewer:
         while running:
             running = self._handle_events()
 
-            self._draw_base_map()
+            if self.screen is None:
+                return
+
+            self._draw_base_map(self.screen)
             self._draw_overlays()
 
             for named_path in named_paths:
                 self._draw_path(
+                    self.screen,
                     path=named_path.path,
                     color=named_path.color.as_tuple(),
                 )
 
-            self._draw_special_marker(start, CellState.START)
-            self._draw_special_marker(goal, CellState.GOAL)
+            self._draw_special_marker(self.screen, start, CellState.START)
+            self._draw_special_marker(self.screen, goal, CellState.GOAL)
 
             self._finalize_frame()
 
         pygame.quit()
 
-    def run_side_by_side_view(
+    def run_grid_comparison_view(
         self,
         start: Position,
         goal: Position,
-        left_visualization: AlgorithmVisualization,
-        right_visualization: AlgorithmVisualization,
+        visualizations: list[AlgorithmVisualization],
     ) -> None:
-        comparison_width = self.window_width * 2
+        rows, cols = self._calculate_comparison_grid(len(visualizations))
+
+        viewport_width = self.config.max_comparison_window_width // cols
+        viewport_height = self.config.max_comparison_window_height // rows
+
+        total_width = viewport_width * cols
+        total_height = viewport_height * rows
+
         self._initialize_pygame(
-            window_width=comparison_width,
-            window_height=self.window_height,
+            window_width=total_width,
+            window_height=total_height,
         )
 
         running = True
-        right_offset = self.window_width
 
         while running:
             running = self._handle_events()
@@ -163,26 +186,34 @@ class PygameGridViewer:
 
             self.screen.fill(self.colors.background.as_tuple())
 
-            self._draw_base_map_with_offset(x_offset=0)
-            self._draw_base_map_with_offset(x_offset=right_offset)
+            for index, visualization in enumerate(visualizations):
+                row_index = index // cols
+                col_index = index % cols
 
-            self._draw_path(
-                path=left_visualization.path,
-                color=left_visualization.color.as_tuple(),
-                x_offset=0,
-            )
+                x_offset = col_index * viewport_width
+                y_offset = row_index * viewport_height
 
-            self._draw_path(
-                path=right_visualization.path,
-                color=right_visualization.color.as_tuple(),
-                x_offset=right_offset,
-            )
+                viewport_surface = self._render_visualization_to_surface(
+                    start=start,
+                    goal=goal,
+                    visualization=visualization,
+                )
 
-            self._draw_special_marker(start, CellState.START, x_offset=0)
-            self._draw_special_marker(goal, CellState.GOAL, x_offset=0)
+                scaled_surface = pygame.transform.scale(
+                    viewport_surface,
+                    (viewport_width, viewport_height),
+                )
 
-            self._draw_special_marker(start, CellState.START, x_offset=right_offset)
-            self._draw_special_marker(goal, CellState.GOAL, x_offset=right_offset)
+                self.screen.blit(
+                    scaled_surface,
+                    (x_offset, y_offset),
+                )
+
+                self._draw_performance_box(
+                    visualization=visualization,
+                    x=x_offset + 10,
+                    y=y_offset + 10,
+                )
 
             self._finalize_frame()
 
@@ -193,6 +224,37 @@ class PygameGridViewer:
         overlay: BaseOverlay,
     ) -> None:
         self.overlays.append(overlay)
+
+    def _render_visualization_to_surface(
+        self,
+        start: Position,
+        goal: Position,
+        visualization: AlgorithmVisualization,
+    ) -> pygame.Surface:
+        surface = pygame.Surface(
+            (
+                self.grid_map.width,
+                self.grid_map.height,
+            )
+        )
+
+        surface.fill(self.colors.background.as_tuple())
+
+        original_cell_size = self.cell_size
+        self.cell_size = 1
+
+        self._draw_base_map(surface)
+        self._draw_path(
+            surface,
+            path=visualization.path,
+            color=visualization.color.as_tuple(),
+        )
+        self._draw_special_marker(surface, start, CellState.START)
+        self._draw_special_marker(surface, goal, CellState.GOAL)
+
+        self.cell_size = original_cell_size
+
+        return surface
 
     def _initialize_pygame(
         self,
@@ -234,13 +296,81 @@ class PygameGridViewer:
 
         return max(min(width_scale, height_scale), 1)
 
+    @staticmethod
+    def _calculate_comparison_grid(
+        item_count: int,
+    ) -> tuple[int, int]:
+        if item_count <= 0:
+            raise ValueError("At least one visualization is required.")
+
+        if item_count == 1:
+            return 1, 1
+
+        if item_count == 2:
+            return 1, 2
+
+        if item_count == 3:
+            return 1, 3
+
+        if item_count == 4:
+            return 2, 2
+
+        if item_count <= 6:
+            return 2, 3
+
+        if item_count <= 9:
+            return 3, 3
+
+        raise ValueError("Grid comparison supports up to 9 visualizations.")
+
+    def _draw_performance_box(
+            self,
+            visualization: AlgorithmVisualization,
+            x: int,
+            y: int,
+    ) -> None:
+        if self.screen is None or visualization.result is None:
+            return
+
+        font = pygame.font.SysFont("Arial", 16)
+
+        result = visualization.result
+
+        lines = [
+            f"Algorithm: {result.algorithm_name}",
+            f"Found: {result.found}",
+            f"Path length: {result.path_length}",
+            f"Visited nodes: {result.visited_nodes}",
+            f"Time: {result.execution_time_ms:.3f} ms",
+        ]
+
+        padding = 8
+        line_height = 20
+        box_width = 160
+        box_height = padding * 2 + len(lines) * line_height
+
+        background = pygame.Surface((box_width, box_height))
+        background.set_alpha(180)
+        background.fill((0, 0, 0))
+
+        self.screen.blit(background, (x, y))
+
+        for index, line in enumerate(lines):
+            text_surface = font.render(line, True, (255, 255, 255))
+            self.screen.blit(
+                text_surface,
+                (
+                    x + padding,
+                    y + padding + index * line_height,
+                ),
+            )
+
     def _grid_to_screen(
         self,
         row: int,
         col: int,
-        x_offset: int = 0,
     ) -> tuple[int, int]:
-        x = col * self.cell_size + self.cell_size // 2 + x_offset
+        x = col * self.cell_size + self.cell_size // 2
         y = row * self.cell_size + self.cell_size // 2
 
         return x, y
@@ -252,17 +382,12 @@ class PygameGridViewer:
         for overlay in self.overlays:
             overlay.draw(self.screen)
 
-    def _draw_base_map(self) -> None:
-        if self.screen is None:
-            return
-
-        self.screen.fill(self.colors.background.as_tuple())
-        self._draw_base_map_with_offset(x_offset=0)
-
-    def _draw_base_map_with_offset(
+    def _draw_base_map(
         self,
-        x_offset: int,
+        surface: pygame.Surface,
     ) -> None:
+        surface.fill(self.colors.background.as_tuple())
+
         for row in range(self.grid_map.height):
             for col in range(self.grid_map.width):
                 position = Position(row=row, col=col)
@@ -274,87 +399,84 @@ class PygameGridViewer:
                 )
 
                 self._draw_cell(
+                    surface=surface,
                     position=position,
                     state=state,
-                    x_offset=x_offset,
                 )
 
     def _draw_positions(
         self,
+        surface: pygame.Surface,
         positions: list[Position],
         state: CellState,
-        x_offset: int = 0,
     ) -> None:
         for position in positions:
             self._draw_position(
+                surface=surface,
                 position=position,
                 state=state,
-                x_offset=x_offset,
             )
 
     def _draw_position(
         self,
+        surface: pygame.Surface,
         position: Position,
         state: CellState,
-        x_offset: int = 0,
     ) -> None:
         self._draw_cell(
+            surface=surface,
             position=position,
             state=state,
-            x_offset=x_offset,
         )
 
     def _draw_cell(
         self,
+        surface: pygame.Surface,
         position: Position,
         state: CellState,
-        x_offset: int = 0,
     ) -> None:
         self._draw_cell_by_coordinates(
+            surface=surface,
             row=position.row,
             col=position.col,
             state=state,
-            x_offset=x_offset,
         )
 
     def _draw_nodes(
         self,
+        surface: pygame.Surface,
         nodes: GridNodeCollection,
         state: CellState,
-        x_offset: int = 0,
     ) -> None:
         for row, col in nodes:
             self._draw_cell_by_coordinates(
+                surface=surface,
                 row=row,
                 col=col,
                 state=state,
-                x_offset=x_offset,
             )
 
     def _draw_cell_by_coordinates(
         self,
+        surface: pygame.Surface,
         row: int,
         col: int,
         state: CellState,
-        x_offset: int = 0,
     ) -> None:
-        if self.screen is None:
-            return
-
         color = self._get_color(state)
 
         rect = pygame.Rect(
-            col * self.cell_size + x_offset,
+            col * self.cell_size,
             row * self.cell_size,
             self.cell_size,
             self.cell_size,
         )
 
-        pygame.draw.rect(self.screen, color, rect)
+        pygame.draw.rect(surface, color, rect)
 
         if self.config.draw_grid:
             pygame.draw.rect(
-                self.screen,
+                surface,
                 self.colors.grid_line.as_tuple(),
                 rect,
                 width=1,
@@ -362,24 +484,20 @@ class PygameGridViewer:
 
     def _draw_special_marker(
         self,
+        surface: pygame.Surface,
         position: Position,
         state: CellState,
-        x_offset: int = 0,
     ) -> None:
-        if self.screen is None:
-            return
-
         color = self._get_color(state)
         center_x, center_y = self._grid_to_screen(
             row=position.row,
             col=position.col,
-            x_offset=x_offset,
         )
 
         radius = max(self.cell_size * 2, 4)
 
         pygame.draw.circle(
-            self.screen,
+            surface,
             color,
             (center_x, center_y),
             radius,
@@ -387,11 +505,11 @@ class PygameGridViewer:
 
     def _draw_path(
         self,
+        surface: pygame.Surface,
         path: tuple[tuple[int, int], ...] | list[Position],
         color: tuple[int, int, int] | None = None,
-        x_offset: int = 0,
     ) -> None:
-        if self.screen is None or len(path) < 2:
+        if len(path) < 2:
             return
 
         path_color = color or self.colors.path.as_tuple()
@@ -408,12 +526,11 @@ class PygameGridViewer:
                 self._grid_to_screen(
                     row=row,
                     col=col,
-                    x_offset=x_offset,
                 )
             )
 
         pygame.draw.lines(
-            self.screen,
+            surface,
             path_color,
             False,
             points,

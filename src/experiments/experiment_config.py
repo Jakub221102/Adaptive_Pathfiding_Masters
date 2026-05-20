@@ -17,12 +17,14 @@ class ExperimentConfig(BaseModel):
 
     algorithm: AlgorithmName = AlgorithmName.ASTAR
     viewer_mode: ViewerMode = ViewerMode.STATIC
-    show_cluster_overlay: bool = False
 
     scenario_index: int = Field(default=0, ge=0)
-    min_optimal_length: float = 100
+    min_optimal_length: float = Field(default=100, ge=0)
 
-    fps: int = 120
-    step_delay_ms: int = 1
-    steps_per_frame: int = 100
-    step_record_interval: int = 50
+    fps: int = Field(default=120, gt=0)
+    step_delay_ms: int = Field(default=1, ge=0)
+    steps_per_frame: int = Field(default=100, gt=0)
+    step_record_interval: int = Field(default=10, gt=0)
+
+    show_cluster_overlay: bool = False
+    cluster_size: int = Field(default=32, gt=0)

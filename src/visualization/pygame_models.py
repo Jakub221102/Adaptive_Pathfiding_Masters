@@ -1,8 +1,9 @@
 from enum import Enum
 
+
 from pydantic import BaseModel, Field
 
-from src.core.models import Position
+from src.core.models import PathfindingResult, Position
 
 
 class CellState(str, Enum):
@@ -42,6 +43,8 @@ class PygameViewerConfig(BaseModel):
     cell_size: int | None = None
     max_window_width: int = 1400
     max_window_height: int = 900
+    max_comparison_window_width: int = 1000
+    max_comparison_window_height: int = 600
     fps: int = Field(default=60, gt=0)
     draw_grid: bool = False
     window_title: str = "Pathfinding Viewer"
@@ -70,3 +73,4 @@ class AlgorithmVisualization(BaseModel):
     name: str
     path: list[Position]
     color: RGBColor
+    result: PathfindingResult | None = None
