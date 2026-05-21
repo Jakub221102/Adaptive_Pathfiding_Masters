@@ -34,6 +34,7 @@ class AbstractEdge(BaseModel):
     from_node_id: int
     to_node_id: int
     cost: float
+    path: list[Position] = []
 
 
 class AbstractGraph(BaseModel):
@@ -44,3 +45,19 @@ class AbstractGraph(BaseModel):
 class HPAPathResult(BaseModel):
     abstract_path: list[AbstractNode]
     refined_path: list[Position]
+
+
+class HPAPreprocessingStats(BaseModel):
+    cluster_count: int
+    entrance_count: int
+    abstract_node_count: int
+    abstract_edge_count: int
+    local_path_cache_size: int
+    preprocessing_time_ms: float
+
+
+class HPAQueryStats(BaseModel):
+    abstract_path_edge_count: int = 0
+    refined_path_length: int = 0
+    local_path_cache_hits: int = 0
+    local_path_cache_misses: int = 0

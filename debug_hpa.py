@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from src.core.models import Position
 from src.experiments.hpa_debug_experiment import HPADebugExperiment
 from src.loaders.map_loader import load_moving_ai_map
 
@@ -12,6 +13,8 @@ def main() -> None:
     experiment = HPADebugExperiment(
         grid_map=grid_map,
         cluster_size=32,
+        start=Position(row=151, col=328),
+        goal=Position(row=485, col=160),
     )
 
     experiment.run()

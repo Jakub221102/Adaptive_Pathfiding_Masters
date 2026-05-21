@@ -1,5 +1,5 @@
 from src.algorithms.hpa_star import HPAStar
-from src.core.models import GridMap
+from src.core.models import GridMap, Position
 
 
 class HPADebugExperiment:
@@ -7,48 +7,39 @@ class HPADebugExperiment:
         self,
         grid_map: GridMap,
         cluster_size: int = 32,
+        start: Position | None = None,
+        goal: Position | None = None,
     ) -> None:
         self.grid_map = grid_map
         self.cluster_size = cluster_size
+        self.start = start
+        self.goal = goal
 
     def run(self) -> None:
         hpa = HPAStar(cluster_size=self.cluster_size)
 
-        clusters = hpa.build_clusters(self.grid_map)
-        entrances = hpa.detect_entrances(self.grid_map, clusters)
+        hpa.preprocess_map(self.grid_map)
 
-        graph = hpa.build_abstract_graph(
+        print("Preprocessing stats:")
+        print(hpa.get_preprocessing_stats().model_dump_json(indent=2))
+
+        if self.start is None or self.goal is None:
+            return
+
+        result = hpa.find_path(
             grid_map=self.grid_map,
-            entrances=entrances,
-            clusters=clusters,
+            start=self.start,
+            goal=self.goal,
         )
 
-        print(f"Clusters: {len(clusters)}")
-        print(f"Entrances: {len(entrances)}")
-        print(f"Abstract nodes: {len(graph.nodes)}")
-        print(f"Abstract edges: {len(graph.edges)}")
+        print("First query stats:")
+        print(hpa.get_last_query_stats().model_dump_json(indent=2))
 
-        if len(graph.nodes) < 2:
-            print("Not enough abstract nodes for pathfinding.")
-            return
-
-        abstract_path = hpa.find_abstract_path(
-            graph=graph,
-            start_node_id=graph.nodes[0].id,
-            goal_node_id=graph.nodes[-1].id,
+        result = hpa.find_path(
+            grid_map=self.grid_map,
+            start=self.start,
+            goal=self.goal,
         )
 
-        if not abstract_path:
-            print("No abstract path found.")
-            return
-
-        print(f"Abstract path length: {len(abstract_path)}")
-
-        print("Abstract node IDs:")
-        print([node.id for node in abstract_path])
-
-        print("Abstract node positions:")
-        print([
-            (node.position.row, node.position.col)
-            for node in abstract_path
-        ])
+        print("Second query stats:")
+        print(hpa.get_last_query_stats().model_dump_json(indent=2))

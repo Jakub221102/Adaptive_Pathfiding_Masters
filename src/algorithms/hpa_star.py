@@ -9,6 +9,8 @@ from src.core.hpa_models import (
     AbstractNode,
     Cluster,
     Entrance,
+    HPAPreprocessingStats,
+    HPAQueryStats,
 )
 from src.core.models import GridMap, PathfindingResult, Position
 from src.core.trace import RawAlgorithmStep
@@ -22,6 +24,7 @@ class HPAStar(PathfindingAlgorithm):
         self._fallback_astar = AStar()
 
         self._preprocessed_map_name: str | None = None
+        self._preprocessing_time_ms: float = 0.0
         self._clusters: list[Cluster] = []
         self._entrances: list[Entrance] = []
         self._abstract_graph: AbstractGraph | None = None
@@ -30,9 +33,21 @@ class HPAStar(PathfindingAlgorithm):
         self._cluster_lookup: dict[tuple[int, int], Cluster] = {}
         self._allowed_positions_by_cluster: dict[int, set[tuple[int, int]]] = {}
 
+        self._local_path_cache: dict[
+            tuple[tuple[int, int], tuple[int, int], int | None],
+            list[Position],
+        ] = {}
+
+        self._local_path_cache_hits: int = 0
+        self._local_path_cache_misses: int = 0
+        self._last_query_stats: HPAQueryStats = HPAQueryStats()
+
     def preprocess_map(self, grid_map: GridMap) -> None:
         if self._preprocessed_map_name == grid_map.name:
             return
+
+        preprocessing_start_time = time.perf_counter()
+        self._local_path_cache.clear()
 
         self._clusters = self.build_clusters(grid_map)
         self._cluster_by_id = {
@@ -59,6 +74,7 @@ class HPAStar(PathfindingAlgorithm):
         )
 
         self._preprocessed_map_name = grid_map.name
+        self._preprocessing_time_ms = (time.perf_counter() - preprocessing_start_time) * 1000
 
     def find_path(
         self,
@@ -67,6 +83,8 @@ class HPAStar(PathfindingAlgorithm):
         goal: Position,
     ) -> PathfindingResult:
         start_time = time.perf_counter()
+        query_cache_hits_before = self._local_path_cache_hits
+        query_cache_misses_before = self._local_path_cache_misses
 
         self.preprocess_map(grid_map)
 
@@ -108,13 +126,13 @@ class HPAStar(PathfindingAlgorithm):
             goal_cluster=goal_cluster,
         )
 
-        abstract_path = self.find_abstract_path(
+        abstract_edges = self.find_abstract_edge_path(
             graph=query_graph,
             start_node_id=start_node.id,
             goal_node_id=goal_node.id,
         )
 
-        if not abstract_path:
+        if not abstract_edges:
             return self._build_hpa_result(
                 path=[],
                 found=False,
@@ -122,15 +140,25 @@ class HPAStar(PathfindingAlgorithm):
                 start_time=start_time,
             )
 
-        refined_path = self._refine_abstract_path(
-            grid_map=grid_map,
-            abstract_path=abstract_path,
+        refined_path = self._refine_abstract_edge_path(
+            abstract_edges=abstract_edges,
+        )
+
+        self._last_query_stats = HPAQueryStats(
+            abstract_path_edge_count=len(abstract_edges),
+            refined_path_length=max(len(refined_path) - 1, 0),
+            local_path_cache_hits=(
+                    self._local_path_cache_hits - query_cache_hits_before
+            ),
+            local_path_cache_misses=(
+                    self._local_path_cache_misses - query_cache_misses_before
+            ),
         )
 
         return self._build_hpa_result(
             path=refined_path,
             found=bool(refined_path),
-            visited_nodes=len(abstract_path),
+            visited_nodes=len(abstract_edges),
             start_time=start_time,
         )
 
@@ -229,6 +257,7 @@ class HPAStar(PathfindingAlgorithm):
                     from_node_id=node_a.id,
                     to_node_id=node_b.id,
                     cost=1,
+                    path=[node_a.position, node_b.position],
                 )
             )
             edges.append(
@@ -236,6 +265,7 @@ class HPAStar(PathfindingAlgorithm):
                     from_node_id=node_b.id,
                     to_node_id=node_a.id,
                     cost=1,
+                    path=[node_b.position, node_a.position],
                 )
             )
 
@@ -316,6 +346,129 @@ class HPAStar(PathfindingAlgorithm):
 
         return []
 
+    def find_abstract_edge_path(
+            self,
+            graph: AbstractGraph,
+            start_node_id: int,
+            goal_node_id: int,
+    ) -> list[AbstractEdge]:
+        nodes_by_id = {
+            node.id: node
+            for node in graph.nodes
+        }
+
+        adjacency: dict[int, list[AbstractEdge]] = {}
+
+        for edge in graph.edges:
+            adjacency.setdefault(edge.from_node_id, []).append(edge)
+
+        open_heap: list[tuple[float, int, int]] = []
+        came_from_edge: dict[int, AbstractEdge] = {}
+        g_score: dict[int, float] = {
+            start_node_id: 0
+        }
+
+        counter = 0
+        heapq.heappush(open_heap, (0, counter, start_node_id))
+
+        closed: set[int] = set()
+
+        while open_heap:
+            _, _, current_id = heapq.heappop(open_heap)
+
+            if current_id in closed:
+                continue
+
+            closed.add(current_id)
+
+            if current_id == goal_node_id:
+                return self._reconstruct_abstract_edge_path(
+                    came_from_edge=came_from_edge,
+                    current_id=current_id,
+                    start_node_id=start_node_id,
+                )
+
+            for edge in adjacency.get(current_id, []):
+                neighbor_id = edge.to_node_id
+                tentative_g = g_score[current_id] + edge.cost
+
+                if neighbor_id not in g_score or tentative_g < g_score[neighbor_id]:
+                    came_from_edge[neighbor_id] = edge
+                    g_score[neighbor_id] = tentative_g
+
+                    counter += 1
+                    priority = tentative_g + self._abstract_heuristic(
+                        nodes_by_id[neighbor_id],
+                        nodes_by_id[goal_node_id],
+                    )
+
+                    heapq.heappush(
+                        open_heap,
+                        (priority, counter, neighbor_id),
+                    )
+
+        return []
+
+    def get_preprocessing_stats(self) -> HPAPreprocessingStats:
+        if self._abstract_graph is None:
+            return HPAPreprocessingStats(
+                cluster_count=0,
+                entrance_count=0,
+                abstract_node_count=0,
+                abstract_edge_count=0,
+                local_path_cache_size=len(self._local_path_cache),
+                preprocessing_time_ms=self._preprocessing_time_ms,
+            )
+
+        return HPAPreprocessingStats(
+            cluster_count=len(self._clusters),
+            entrance_count=len(self._entrances),
+            abstract_node_count=len(self._abstract_graph.nodes),
+            abstract_edge_count=len(self._abstract_graph.edges),
+            local_path_cache_size=len(self._local_path_cache),
+            preprocessing_time_ms=self._preprocessing_time_ms,
+        )
+
+    def get_last_query_stats(self) -> HPAQueryStats:
+        return self._last_query_stats
+
+    def _find_local_path_cached(
+            self,
+            grid_map: GridMap,
+            start: Position,
+            goal: Position,
+            cluster_id: int | None,
+            allowed_positions: set[tuple[int, int]] | None,
+    ) -> list[Position]:
+        start_node = (start.row, start.col)
+        goal_node = (goal.row, goal.col)
+
+        cache_key = (
+            start_node,
+            goal_node,
+            cluster_id,
+        )
+
+        if cache_key in self._local_path_cache:
+            self._local_path_cache_hits += 1
+            return self._local_path_cache[cache_key]
+
+        self._local_path_cache_misses += 1
+
+        result = self._fallback_astar.find_path(
+            grid_map=grid_map,
+            start=start,
+            goal=goal,
+            allowed_positions=allowed_positions,
+        )
+
+        if not result.found:
+            self._local_path_cache[cache_key] = []
+            return []
+
+        self._local_path_cache[cache_key] = result.path
+        return result.path
+
     def _build_intra_cluster_edges(
         self,
         grid_map: GridMap,
@@ -346,28 +499,31 @@ class HPAStar(PathfindingAlgorithm):
                     node_a = cluster_nodes[i]
                     node_b = cluster_nodes[j]
 
-                    result = self._fallback_astar.find_path(
+                    path = self._find_local_path_cached(
                         grid_map=grid_map,
                         start=node_a.position,
                         goal=node_b.position,
+                        cluster_id=cluster.id,
                         allowed_positions=allowed_positions,
                     )
 
-                    if not result.found:
+                    if not path:
                         continue
 
                     edges.append(
                         AbstractEdge(
                             from_node_id=node_a.id,
                             to_node_id=node_b.id,
-                            cost=float(result.path_length),
+                            cost=float(len(path) - 1),
+                            path=path,
                         )
                     )
                     edges.append(
                         AbstractEdge(
                             from_node_id=node_b.id,
                             to_node_id=node_a.id,
-                            cost=float(result.path_length),
+                            cost=float(len(path) - 1),
+                            path=list(reversed(path)),
                         )
                     )
 
@@ -550,28 +706,32 @@ class HPAStar(PathfindingAlgorithm):
         ]
 
         for other_node in cluster_nodes:
-            result = self._fallback_astar.find_path(
+            path = self._find_local_path_cached(
                 grid_map=grid_map,
                 start=node.position,
                 goal=other_node.position,
+                cluster_id=cluster.id,
                 allowed_positions=allowed_positions,
             )
 
-            if not result.found:
+            if not path:
                 continue
 
             edges.append(
                 AbstractEdge(
                     from_node_id=node.id,
                     to_node_id=other_node.id,
-                    cost=float(result.path_length),
+                    cost=float(len(path) - 1),
+                    path=path,
                 )
             )
+
             edges.append(
                 AbstractEdge(
                     from_node_id=other_node.id,
                     to_node_id=node.id,
-                    cost=float(result.path_length),
+                    cost=float(len(path) - 1),
+                    path=list(reversed(path)),
                 )
             )
 
@@ -600,23 +760,23 @@ class HPAStar(PathfindingAlgorithm):
                 return []
 
             if current_cluster.id == next_cluster.id:
-                allowed_positions = self._allowed_positions_by_cluster[
-                    current_cluster.id
-                ]
+                allowed_positions = self._allowed_positions_by_cluster[current_cluster.id]
+
+                segment = self._find_local_path_cached(
+                    grid_map=grid_map,
+                    start=current_node.position,
+                    goal=next_node.position,
+                    cluster_id=current_cluster.id,
+                    allowed_positions=allowed_positions,
+                )
             else:
-                allowed_positions = None
+                segment = [
+                    current_node.position,
+                    next_node.position,
+                ]
 
-            result = self._fallback_astar.find_path(
-                grid_map=grid_map,
-                start=current_node.position,
-                goal=next_node.position,
-                allowed_positions=allowed_positions,
-            )
-
-            if not result.found:
+            if not segment:
                 return []
-
-            segment = result.path
 
             if full_path:
                 segment = segment[1:]
@@ -657,6 +817,48 @@ class HPAStar(PathfindingAlgorithm):
 
         path.reverse()
         return path
+
+    @staticmethod
+    def _reconstruct_abstract_edge_path(
+            came_from_edge: dict[int, AbstractEdge],
+            current_id: int,
+            start_node_id: int,
+    ) -> list[AbstractEdge]:
+        path: list[AbstractEdge] = []
+
+        while current_id != start_node_id:
+            edge = came_from_edge.get(current_id)
+
+            if edge is None:
+                return []
+
+            path.append(edge)
+            current_id = edge.from_node_id
+
+        path.reverse()
+        return path
+
+    @staticmethod
+    def _refine_abstract_edge_path(
+            abstract_edges: list[AbstractEdge],
+    ) -> list[Position]:
+        if not abstract_edges:
+            return []
+
+        full_path: list[Position] = []
+
+        for edge in abstract_edges:
+            if not edge.path:
+                return []
+
+            segment = edge.path
+
+            if full_path:
+                segment = segment[1:]
+
+            full_path.extend(segment)
+
+        return full_path
 
     @staticmethod
     def _abstract_heuristic(
