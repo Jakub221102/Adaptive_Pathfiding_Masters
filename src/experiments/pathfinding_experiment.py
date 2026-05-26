@@ -41,13 +41,14 @@ class PathfindingExperiment(BaseExperiment):
 
             viewer.add_overlay(PerformanceOverlay(result=result))
 
-            viewer.add_overlay(
-                HeatmapOverlay(
-                    steps=steps,
-                    cell_size=viewer.cell_size,
-                    alpha=120,
+            if self.config.show_heatmap_overlay and steps:
+                viewer.add_overlay(
+                    HeatmapOverlay(
+                        steps=steps,
+                        cell_size=viewer.cell_size,
+                        alpha=120,
+                    )
                 )
-            )
 
             viewer.run_algorithm_animation(
                 start=scenario.start,

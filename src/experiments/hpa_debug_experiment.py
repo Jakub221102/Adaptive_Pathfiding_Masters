@@ -1,4 +1,4 @@
-from src.algorithms.hpa_star import HPAStar
+from src.algorithms.hpa.hpa_star import HPAStar
 from src.core.models import GridMap, Position
 
 

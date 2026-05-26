@@ -1,6 +1,6 @@
 from src.algorithms.astar import AStar
 from src.algorithms.base import PathfindingAlgorithm
-from src.algorithms.hpa_star import HPAStar
+from src.algorithms.hpa.hpa_star import HPAStar
 from src.experiments.experiment_config import AlgorithmName
 
 

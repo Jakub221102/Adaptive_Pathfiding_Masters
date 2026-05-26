@@ -35,7 +35,7 @@ class AbstractEdge(BaseModel):
     from_node_id: int
     to_node_id: int
     cost: float
-    path: list[Position] = []
+    path: list[Position] = Field(default_factory=list)
 
 
 class AbstractGraph(BaseModel):

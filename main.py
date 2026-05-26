@@ -17,6 +17,7 @@ def main() -> None:
         step_delay_ms=1,
         steps_per_frame=100,
         step_record_interval=1,
+        show_heatmap_overlay=True,
     )
 
     experiment = PathfindingExperiment(config)
