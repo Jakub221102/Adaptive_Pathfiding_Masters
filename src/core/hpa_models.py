@@ -22,6 +22,7 @@ class Entrance(BaseModel):
     cluster_b_id: int
     position_a: Position
     position_b: Position
+    width: int = 1
 
 
 class AbstractNode(BaseModel):

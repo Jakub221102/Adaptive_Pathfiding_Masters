@@ -101,6 +101,7 @@ class PygameGridViewer:
             current_step = steps[step_index]
 
             self._draw_base_map(self.screen)
+
             self._draw_nodes(self.screen, current_step.closed_nodes, CellState.CLOSED)
             self._draw_nodes(self.screen, current_step.open_nodes, CellState.OPEN)
 
@@ -113,10 +114,11 @@ class PygameGridViewer:
                     CellState.CURRENT,
                 )
 
+            self._draw_overlays()
+
             if current_step.path:
                 self._draw_path(self.screen, current_step.path)
 
-            self._draw_overlays()
             self._draw_special_marker(self.screen, start, CellState.START)
             self._draw_special_marker(self.screen, goal, CellState.GOAL)
 

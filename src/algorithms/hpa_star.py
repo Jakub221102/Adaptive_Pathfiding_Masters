@@ -19,8 +19,13 @@ from src.core.trace import RawAlgorithmStep
 class HPAStar(PathfindingAlgorithm):
     name = "HPA*"
 
-    def __init__(self, cluster_size: int = 32) -> None:
+    def __init__(self, cluster_size: int = 32,
+                max_entrances_per_cluster_pair: int = 1,
+                min_entrance_width: int = 1,) -> None:
+
         self.cluster_size = cluster_size
+        self.max_entrances_per_cluster_pair = max_entrances_per_cluster_pair
+        self.min_entrance_width = min_entrance_width
         self._fallback_astar = AStar()
 
         self._preprocessed_map_name: str | None = None
@@ -41,6 +46,8 @@ class HPAStar(PathfindingAlgorithm):
         self._local_path_cache_hits: int = 0
         self._local_path_cache_misses: int = 0
         self._last_query_stats: HPAQueryStats = HPAQueryStats()
+        self._last_abstract_edges: list[AbstractEdge] = []
+        self._last_refined_path: list[Position] = []
 
     def preprocess_map(self, grid_map: GridMap) -> None:
         if self._preprocessed_map_name == grid_map.name:
@@ -131,6 +138,7 @@ class HPAStar(PathfindingAlgorithm):
             start_node_id=start_node.id,
             goal_node_id=goal_node.id,
         )
+        self._last_abstract_edges = abstract_edges
 
         if not abstract_edges:
             return self._build_hpa_result(
@@ -143,6 +151,7 @@ class HPAStar(PathfindingAlgorithm):
         refined_path = self._refine_abstract_edge_path(
             abstract_edges=abstract_edges,
         )
+        self._last_refined_path = refined_path
 
         self._last_query_stats = HPAQueryStats(
             abstract_path_edge_count=len(abstract_edges),
@@ -163,11 +172,11 @@ class HPAStar(PathfindingAlgorithm):
         )
 
     def find_path_with_steps(
-        self,
-        grid_map: GridMap,
-        start: Position,
-        goal: Position,
-        step_record_interval: int = 10,
+            self,
+            grid_map: GridMap,
+            start: Position,
+            goal: Position,
+            step_record_interval: int = 10,
     ) -> tuple[PathfindingResult, list[RawAlgorithmStep]]:
         result = self.find_path(
             grid_map=grid_map,
@@ -175,7 +184,11 @@ class HPAStar(PathfindingAlgorithm):
             goal=goal,
         )
 
-        return result, []
+        steps = self._build_hpa_steps_from_edges(
+            abstract_edges=self._last_abstract_edges,
+        )
+
+        return result, steps
 
     def build_clusters(self, grid_map: GridMap) -> list[Cluster]:
         clusters: list[Cluster] = []
@@ -221,7 +234,7 @@ class HPAStar(PathfindingAlgorithm):
                 )
             )
 
-        return entrances
+        return self._prune_entrances(entrances)
 
     def build_abstract_graph(
         self,
@@ -639,6 +652,46 @@ class HPAStar(PathfindingAlgorithm):
 
         return entrances
 
+    def _prune_entrances(
+            self,
+            entrances: list[Entrance],
+    ) -> list[Entrance]:
+        grouped: dict[tuple[int, int], list[Entrance]] = {}
+
+        for candidate in entrances:
+            if candidate.width < self.min_entrance_width:
+                continue
+
+            cluster_ids = (
+                candidate.cluster_a_id,
+                candidate.cluster_b_id,
+            )
+
+            key: tuple[int, int] = (
+                min(cluster_ids),
+                max(cluster_ids),
+            )
+
+            if key not in grouped:
+                grouped[key] = []
+
+            grouped[key].append(candidate)
+
+        pruned: list[Entrance] = []
+
+        for entrance_group in grouped.values():
+            sorted_group = sorted(
+                entrance_group,
+                key=lambda item: item.width,
+                reverse=True,
+            )
+
+            pruned.extend(
+                sorted_group[: self.max_entrances_per_cluster_pair]
+            )
+
+        return pruned
+
     def _insert_start_and_goal_nodes(
         self,
         grid_map: GridMap,
@@ -804,6 +857,48 @@ class HPAStar(PathfindingAlgorithm):
         )
 
     @staticmethod
+    def _build_hpa_steps_from_edges(
+            abstract_edges: list[AbstractEdge],
+    ) -> list[RawAlgorithmStep]:
+        steps: list[RawAlgorithmStep] = []
+
+        visited_nodes: set[tuple[int, int]] = set()
+        accumulated_path: list[tuple[int, int]] = []
+
+        for edge in abstract_edges:
+            for position in edge.path:
+                node = (position.row, position.col)
+
+                visited_nodes.add(node)
+
+                if (
+                        not accumulated_path
+                        or accumulated_path[-1] != node
+                ):
+                    accumulated_path.append(node)
+
+            if edge.path:
+                current_position = edge.path[-1]
+
+                current = (
+                    current_position.row,
+                    current_position.col,
+                )
+            else:
+                current = None
+
+            steps.append(
+                RawAlgorithmStep(
+                    current=current,
+                    open_nodes=frozenset(),
+                    closed_nodes=frozenset(visited_nodes),
+                    path=tuple(accumulated_path),
+                )
+            )
+
+        return steps
+
+    @staticmethod
     def _reconstruct_abstract_path(
         came_from: dict[int, int],
         current_id: int,
@@ -906,6 +1001,7 @@ class HPAStar(PathfindingAlgorithm):
 
         middle_index = len(group) // 2
         row, neighbor_cluster = group[middle_index]
+        group_width = len(group)
 
         entrances.append(
             Entrance(
@@ -913,6 +1009,7 @@ class HPAStar(PathfindingAlgorithm):
                 cluster_b_id=neighbor_cluster.id,
                 position_a=Position(row=row, col=left_col),
                 position_b=Position(row=row, col=right_col),
+                width=group_width,
             )
         )
 
@@ -929,6 +1026,7 @@ class HPAStar(PathfindingAlgorithm):
 
         middle_index = len(group) // 2
         col, neighbor_cluster = group[middle_index]
+        group_width = len(group)
 
         entrances.append(
             Entrance(
@@ -936,5 +1034,6 @@ class HPAStar(PathfindingAlgorithm):
                 cluster_b_id=neighbor_cluster.id,
                 position_a=Position(row=top_row, col=col),
                 position_b=Position(row=bottom_row, col=col),
+                width=group_width,
             )
         )

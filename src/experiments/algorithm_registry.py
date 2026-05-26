@@ -12,6 +12,6 @@ def create_algorithm(
         case AlgorithmName.ASTAR:
             return AStar()
         case AlgorithmName.HPA_STAR:
-            return HPAStar(cluster_size=cluster_size)
+            return HPAStar(cluster_size=cluster_size, max_entrances_per_cluster_pair=2)
         case _:
             raise ValueError(f"Unsupported algorithm: {name}")

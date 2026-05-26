@@ -16,7 +16,7 @@ class HPADebugExperiment:
         self.goal = goal
 
     def run(self) -> None:
-        hpa = HPAStar(cluster_size=self.cluster_size)
+        hpa = HPAStar(cluster_size=self.cluster_size, max_entrances_per_cluster_pair=2)
 
         hpa.preprocess_map(self.grid_map)
 

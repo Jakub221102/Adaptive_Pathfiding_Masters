@@ -10,13 +10,13 @@ def main() -> None:
         map_path=Path("Data/bg512-map/AR0204SR.map"),
         scen_path=Path("Data/bg512-scen/AR0204SR.map.scen"),
         algorithm=AlgorithmName.HPA_STAR,
-        viewer_mode=ViewerMode.STATIC,
+        viewer_mode=ViewerMode.ANIMATED,
         scenario_index=400,
         min_optimal_length=100,
         fps=120,
         step_delay_ms=1,
         steps_per_frame=100,
-        step_record_interval=10,
+        step_record_interval=1,
     )
 
     experiment = PathfindingExperiment(config)

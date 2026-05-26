@@ -3,6 +3,7 @@ from src.experiments.base_experiment import BaseExperiment
 from src.visualization.overlays.cluster_overlay import ClusterOverlay
 from src.visualization.overlays.performance_overlay import PerformanceOverlay
 from src.visualization.pygame_models import ViewerMode
+from src.visualization.overlays.heatmap_overlay import HeatmapOverlay
 
 
 class PathfindingExperiment(BaseExperiment):
@@ -39,6 +40,14 @@ class PathfindingExperiment(BaseExperiment):
             )
 
             viewer.add_overlay(PerformanceOverlay(result=result))
+
+            viewer.add_overlay(
+                HeatmapOverlay(
+                    steps=steps,
+                    cell_size=viewer.cell_size,
+                    alpha=120,
+                )
+            )
 
             viewer.run_algorithm_animation(
                 start=scenario.start,
