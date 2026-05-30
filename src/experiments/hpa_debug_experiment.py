@@ -4,11 +4,11 @@ from src.core.models import GridMap, Position
 
 class HPADebugExperiment:
     def __init__(
-        self,
-        grid_map: GridMap,
-        cluster_size: int = 32,
-        start: Position | None = None,
-        goal: Position | None = None,
+            self,
+            grid_map: GridMap,
+            cluster_size: int = 32,
+            start: Position | None = None,
+            goal: Position | None = None,
     ) -> None:
         self.grid_map = grid_map
         self.cluster_size = cluster_size
@@ -32,6 +32,9 @@ class HPADebugExperiment:
             goal=self.goal,
         )
 
+        # print("First query result:")
+        # print(result.model_dump_json(indent=2))
+
         print("First query stats:")
         print(hpa.get_last_query_stats().model_dump_json(indent=2))
 
@@ -40,6 +43,9 @@ class HPADebugExperiment:
             start=self.start,
             goal=self.goal,
         )
+
+        # print("Second query result:")
+        # print(result.model_dump_json(indent=2))
 
         print("Second query stats:")
         print(hpa.get_last_query_stats().model_dump_json(indent=2))

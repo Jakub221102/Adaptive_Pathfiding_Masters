@@ -1,15 +1,22 @@
 import heapq
 
+from pydantic import BaseModel
+
 from src.core.hpa_models import AbstractEdge, AbstractGraph, AbstractNode
+
+
+class AbstractSearchResult(BaseModel):
+    path: list[AbstractEdge]
+    visited_node_count: int
 
 
 class AbstractSearch:
     def find_edge_path(
-        self,
-        graph: AbstractGraph,
-        start_node_id: int,
-        goal_node_id: int,
-    ) -> list[AbstractEdge]:
+            self,
+            graph: AbstractGraph,
+            start_node_id: int,
+            goal_node_id: int,
+    ) -> AbstractSearchResult:
         nodes_by_id = {
             node.id: node
             for node in graph.nodes
@@ -40,10 +47,13 @@ class AbstractSearch:
             closed.add(current_id)
 
             if current_id == goal_node_id:
-                return self._reconstruct_edge_path(
-                    came_from_edge=came_from_edge,
-                    current_id=current_id,
-                    start_node_id=start_node_id,
+                return AbstractSearchResult(
+                    path=self._reconstruct_edge_path(
+                        came_from_edge=came_from_edge,
+                        current_id=current_id,
+                        start_node_id=start_node_id,
+                    ),
+                    visited_node_count=len(closed),
                 )
 
             for edge in adjacency.get(current_id, []):
@@ -63,13 +73,16 @@ class AbstractSearch:
 
                     heapq.heappush(open_heap, (priority, counter, neighbor_id))
 
-        return []
+        return AbstractSearchResult(
+            path=[],
+            visited_node_count=len(closed),
+        )
 
     @staticmethod
     def _reconstruct_edge_path(
-        came_from_edge: dict[int, AbstractEdge],
-        current_id: int,
-        start_node_id: int,
+            came_from_edge: dict[int, AbstractEdge],
+            current_id: int,
+            start_node_id: int,
     ) -> list[AbstractEdge]:
         path: list[AbstractEdge] = []
 
@@ -87,10 +100,10 @@ class AbstractSearch:
 
     @staticmethod
     def _heuristic(
-        current: AbstractNode,
-        goal: AbstractNode,
+            current: AbstractNode,
+            goal: AbstractNode,
     ) -> float:
         return (
-            abs(current.position.row - goal.position.row)
-            + abs(current.position.col - goal.position.col)
+                abs(current.position.row - goal.position.row)
+                + abs(current.position.col - goal.position.col)
         )

@@ -28,10 +28,10 @@ class HPAStar(PathfindingAlgorithm):
     name = "HPA*"
 
     def __init__(
-        self,
-        cluster_size: int = 32,
-        max_entrances_per_cluster_pair: int = 2,
-        min_entrance_width: int = 1,
+            self,
+            cluster_size: int = 32,
+            max_entrances_per_cluster_pair: int = 2,
+            min_entrance_width: int = 1,
     ) -> None:
         self.cluster_size = cluster_size
         self.max_entrances_per_cluster_pair = max_entrances_per_cluster_pair
@@ -63,8 +63,8 @@ class HPAStar(PathfindingAlgorithm):
         self._last_refined_path: list[Position] = []
 
     def preprocess_map(
-        self,
-        grid_map: GridMap,
+            self,
+            grid_map: GridMap,
     ) -> None:
         if self._preprocessed_map_name == grid_map.name:
             return
@@ -104,16 +104,19 @@ class HPAStar(PathfindingAlgorithm):
 
         self._preprocessed_map_name = grid_map.name
         self._preprocessing_time_ms = (
-            time.perf_counter() - preprocessing_start_time
-        ) * 1000
+                                              time.perf_counter() - preprocessing_start_time
+                                      ) * 1000
 
     def find_path(
-        self,
-        grid_map: GridMap,
-        start: Position,
-        goal: Position,
+            self,
+            grid_map: GridMap,
+            start: Position,
+            goal: Position,
     ) -> PathfindingResult:
         start_time = time.perf_counter()
+        self._last_query_stats = HPAQueryStats()
+        self._last_abstract_edges = []
+        self._last_refined_path = []
 
         cache_hits_before = self._local_path_cache.hits
         cache_misses_before = self._local_path_cache.misses
@@ -148,6 +151,22 @@ class HPAStar(PathfindingAlgorithm):
                 allowed_positions=self._allowed_positions_by_cluster[start_cluster.id],
             )
 
+            cache_hits = self._local_path_cache.hits - cache_hits_before
+            cache_misses = self._local_path_cache.misses - cache_misses_before
+
+            self._last_query_stats = HPAQueryStats(
+                abstract_nodes_visited=0,
+                abstract_path_edge_count=0,
+                refined_path_length=max(len(path) - 1, 0),
+                local_path_cache_hits=cache_hits,
+                local_path_cache_misses=cache_misses,
+                cache_hit_ratio=self._calculate_cache_hit_ratio(
+                    hits=cache_hits,
+                    misses=cache_misses,
+                ),
+                query_time_ms=(time.perf_counter() - start_time) * 1000,
+            )
+
             return self._build_result(
                 path=path,
                 found=bool(path),
@@ -164,15 +183,38 @@ class HPAStar(PathfindingAlgorithm):
             goal_cluster=goal_cluster,
         )
 
-        abstract_edges = self._abstract_search.find_edge_path(
+        abstract_search_start_time = time.perf_counter()
+
+        abstract_result = self._abstract_search.find_edge_path(
             graph=query_graph,
             start_node_id=start_node.id,
             goal_node_id=goal_node.id,
         )
 
+        abstract_edges = abstract_result.path
+
+        abstract_search_time_ms = (time.perf_counter() - abstract_search_start_time) * 1000
+
         self._last_abstract_edges = abstract_edges
 
         if not abstract_edges:
+            cache_hits = self._local_path_cache.hits - cache_hits_before
+            cache_misses = self._local_path_cache.misses - cache_misses_before
+
+            self._last_query_stats = HPAQueryStats(
+                abstract_nodes_visited=abstract_result.visited_node_count,
+                abstract_path_edge_count=0,
+                refined_path_length=0,
+                local_path_cache_hits=cache_hits,
+                local_path_cache_misses=cache_misses,
+                cache_hit_ratio=self._calculate_cache_hit_ratio(
+                    hits=cache_hits,
+                    misses=cache_misses,
+                ),
+                abstract_search_time_ms=abstract_search_time_ms,
+                query_time_ms=(time.perf_counter() - start_time) * 1000,
+            )
+
             return self._build_result(
                 path=[],
                 found=False,
@@ -180,29 +222,45 @@ class HPAStar(PathfindingAlgorithm):
                 start_time=start_time,
             )
 
+        refinement_start_time = time.perf_counter()
+
         refined_path = self._refine_abstract_edge_path(abstract_edges)
+        refinement_time_ms = (time.perf_counter() - refinement_start_time) * 1000
         self._last_refined_path = refined_path
 
+        cache_hits = self._local_path_cache.hits - cache_hits_before
+        cache_misses = self._local_path_cache.misses - cache_misses_before
+
+        query_time_ms = (time.perf_counter() - start_time) * 1000
+
         self._last_query_stats = HPAQueryStats(
+            abstract_nodes_visited=abstract_result.visited_node_count,
             abstract_path_edge_count=len(abstract_edges),
             refined_path_length=max(len(refined_path) - 1, 0),
-            local_path_cache_hits=self._local_path_cache.hits - cache_hits_before,
-            local_path_cache_misses=self._local_path_cache.misses - cache_misses_before,
+            local_path_cache_hits=cache_hits,
+            local_path_cache_misses=cache_misses,
+            cache_hit_ratio=self._calculate_cache_hit_ratio(
+                hits=cache_hits,
+                misses=cache_misses,
+            ),
+            abstract_search_time_ms=abstract_search_time_ms,
+            refinement_time_ms=refinement_time_ms,
+            query_time_ms=query_time_ms,
         )
 
         return self._build_result(
             path=refined_path,
             found=bool(refined_path),
-            visited_nodes=len(abstract_edges),
+            visited_nodes=abstract_result.visited_node_count,
             start_time=start_time,
         )
 
     def find_path_with_steps(
-        self,
-        grid_map: GridMap,
-        start: Position,
-        goal: Position,
-        step_record_interval: int = 10,
+            self,
+            grid_map: GridMap,
+            start: Position,
+            goal: Position,
+            step_record_interval: int = 10,
     ) -> tuple[PathfindingResult, list[RawAlgorithmStep]]:
         result = self.find_path(
             grid_map=grid_map,
@@ -223,19 +281,26 @@ class HPAStar(PathfindingAlgorithm):
     def get_preprocessing_stats(self) -> HPAPreprocessingStats:
         if self._abstract_graph is None:
             return HPAPreprocessingStats(
-                cluster_count=0,
-                entrance_count=0,
-                abstract_node_count=0,
-                abstract_edge_count=0,
                 local_path_cache_size=self._local_path_cache.size(),
                 preprocessing_time_ms=self._preprocessing_time_ms,
             )
 
+        node_count = len(self._abstract_graph.nodes)
+        edge_count = len(self._abstract_graph.edges)
+
         return HPAPreprocessingStats(
             cluster_count=len(self._clusters),
             entrance_count=len(self._entrances),
-            abstract_node_count=len(self._abstract_graph.nodes),
-            abstract_edge_count=len(self._abstract_graph.edges),
+            abstract_node_count=node_count,
+            abstract_edge_count=edge_count,
+            graph_density=self._calculate_graph_density(
+                node_count=node_count,
+                edge_count=edge_count,
+            ),
+            average_edges_per_node=self._calculate_average_edges_per_node(
+                node_count=node_count,
+                edge_count=edge_count,
+            ),
             local_path_cache_size=self._local_path_cache.size(),
             preprocessing_time_ms=self._preprocessing_time_ms,
         )
@@ -244,13 +309,13 @@ class HPAStar(PathfindingAlgorithm):
         return self._last_query_stats
 
     def _insert_start_and_goal_nodes(
-        self,
-        grid_map: GridMap,
-        graph: AbstractGraph,
-        start: Position,
-        goal: Position,
-        start_cluster: Cluster,
-        goal_cluster: Cluster,
+            self,
+            grid_map: GridMap,
+            graph: AbstractGraph,
+            start: Position,
+            goal: Position,
+            start_cluster: Cluster,
+            goal_cluster: Cluster,
     ) -> tuple[AbstractGraph, AbstractNode, AbstractNode]:
         nodes = list(graph.nodes)
         edges = list(graph.edges)
@@ -294,7 +359,7 @@ class HPAStar(PathfindingAlgorithm):
 
     @staticmethod
     def _refine_abstract_edge_path(
-        abstract_edges: list[AbstractEdge],
+            abstract_edges: list[AbstractEdge],
     ) -> list[Position]:
         if not abstract_edges:
             return []
@@ -314,12 +379,44 @@ class HPAStar(PathfindingAlgorithm):
 
         return full_path
 
+    @staticmethod
+    def _calculate_graph_density(
+            node_count: int,
+            edge_count: int,
+    ) -> float:
+        if node_count <= 1:
+            return 0.0
+
+        return edge_count / (node_count * (node_count - 1))
+
+    @staticmethod
+    def _calculate_average_edges_per_node(
+            node_count: int,
+            edge_count: int,
+    ) -> float:
+        if node_count == 0:
+            return 0.0
+
+        return edge_count / node_count
+
+    @staticmethod
+    def _calculate_cache_hit_ratio(
+            hits: int,
+            misses: int,
+    ) -> float:
+        total = hits + misses
+
+        if total == 0:
+            return 0.0
+
+        return hits / total
+
     def _build_result(
-        self,
-        path: list[Position],
-        found: bool,
-        visited_nodes: int,
-        start_time: float,
+            self,
+            path: list[Position],
+            found: bool,
+            visited_nodes: int,
+            start_time: float,
     ) -> PathfindingResult:
         end_time = time.perf_counter()
 

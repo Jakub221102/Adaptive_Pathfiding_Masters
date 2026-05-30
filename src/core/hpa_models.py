@@ -12,8 +12,8 @@ class Cluster(BaseModel):
 
     def contains(self, position: Position) -> bool:
         return (
-            self.row_start <= position.row < self.row_end
-            and self.col_start <= position.col < self.col_end
+                self.row_start <= position.row < self.row_end
+                and self.col_start <= position.col < self.col_end
         )
 
 
@@ -49,16 +49,29 @@ class HPAPathResult(BaseModel):
 
 
 class HPAPreprocessingStats(BaseModel):
-    cluster_count: int
-    entrance_count: int
-    abstract_node_count: int
-    abstract_edge_count: int
-    local_path_cache_size: int
-    preprocessing_time_ms: float
+    cluster_count: int = 0
+    entrance_count: int = 0
+
+    abstract_node_count: int = 0
+    abstract_edge_count: int = 0
+
+    graph_density: float = 0.0
+    average_edges_per_node: float = 0.0
+
+    local_path_cache_size: int = 0
+    preprocessing_time_ms: float = 0.0
 
 
 class HPAQueryStats(BaseModel):
+    abstract_nodes_visited: int = 0
+
     abstract_path_edge_count: int = 0
     refined_path_length: int = 0
+
     local_path_cache_hits: int = 0
     local_path_cache_misses: int = 0
+    cache_hit_ratio: float = 0.0
+
+    abstract_search_time_ms: float = 0.0
+    refinement_time_ms: float = 0.0
+    query_time_ms: float = 0.0
