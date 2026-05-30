@@ -10,6 +10,8 @@ from src.visualization.pygame_models import (
     NamedPath,
     PygameViewerConfig,
     ViewerColors,
+    AlgorithmAnimationVisualization,
+    ViewportRenderContext,
 )
 
 
@@ -195,6 +197,14 @@ class PygameGridViewer:
                 x_offset = col_index * viewport_width
                 y_offset = row_index * viewport_height
 
+                context = ViewportRenderContext(
+                    x=x_offset,
+                    y=y_offset,
+                    width=viewport_width,
+                    height=viewport_height,
+                    cell_size=1,
+                )
+
                 viewport_surface = self._render_visualization_to_surface(
                     start=start,
                     goal=goal,
@@ -220,6 +230,203 @@ class PygameGridViewer:
             self._finalize_frame()
 
         pygame.quit()
+
+    def run_grid_animation_comparison_view(
+            self,
+            start: Position,
+            goal: Position,
+            visualizations: list[AlgorithmAnimationVisualization],
+            total_animation_time_ms: int = 8000,
+    ) -> None:
+        rows, cols = self._calculate_comparison_grid(len(visualizations))
+
+        viewport_width = self.config.max_comparison_window_width // cols
+        viewport_height = self.config.max_comparison_window_height // rows
+
+        total_width = viewport_width * cols
+        total_height = viewport_height * rows
+
+        self._initialize_pygame(
+            window_width=total_width,
+            window_height=total_height,
+        )
+
+        animation_start_time = pygame.time.get_ticks()
+        running = True
+
+        while running:
+            running = self._handle_events()
+
+            if self.screen is None:
+                return
+
+            elapsed_ms = pygame.time.get_ticks() - animation_start_time
+            progress = min(elapsed_ms / total_animation_time_ms, 1.0)
+
+            self.screen.fill(self.colors.background.as_tuple())
+
+            for index, visualization in enumerate(visualizations):
+                row_index = index // cols
+                col_index = index % cols
+
+                x_offset = col_index * viewport_width
+                y_offset = row_index * viewport_height
+
+                context = ViewportRenderContext(
+                    x=x_offset,
+                    y=y_offset,
+                    width=viewport_width,
+                    height=viewport_height,
+                    cell_size=1,
+                )
+
+                current_step = self._get_step_by_progress(
+                    steps=visualization.steps,
+                    progress=progress,
+                )
+
+                viewport_surface = self._render_animation_step_to_surface(
+                    start=start,
+                    goal=goal,
+                    visualization=visualization,
+                    current_step=current_step,
+                )
+
+                scaled_surface = pygame.transform.scale(
+                    viewport_surface,
+                    (viewport_width, viewport_height),
+                )
+
+                self.screen.blit(
+                    scaled_surface,
+                    (x_offset, y_offset),
+                )
+
+                self._draw_animation_performance_box(
+                    visualization=visualization,
+                    step=current_step,
+                    context=context,
+                    progress=progress,
+                )
+
+            self._finalize_frame()
+
+        pygame.quit()
+
+    def _render_animation_step_to_surface(
+            self,
+            start: Position,
+            goal: Position,
+            visualization: AlgorithmAnimationVisualization,
+            current_step: RawAlgorithmStep | None,
+    ) -> pygame.Surface:
+        surface = pygame.Surface(
+            (
+                self.grid_map.width,
+                self.grid_map.height,
+            )
+        )
+
+        original_cell_size = self.cell_size
+        self.cell_size = 1
+
+        self._draw_base_map(surface)
+
+        if current_step is not None:
+            self._draw_nodes(surface, current_step.closed_nodes, CellState.CLOSED)
+            self._draw_nodes(surface, current_step.open_nodes, CellState.OPEN)
+
+            if current_step.current is not None:
+                row, col = current_step.current
+                self._draw_cell_by_coordinates(
+                    surface,
+                    row,
+                    col,
+                    CellState.CURRENT,
+                )
+
+            if current_step.path:
+                self._draw_path(
+                    surface,
+                    current_step.path,
+                    color=visualization.color.as_tuple(),
+                )
+
+        elif visualization.result.path:
+            self._draw_path(
+                surface,
+                visualization.result.path,
+                color=visualization.color.as_tuple(),
+            )
+
+        self._draw_special_marker(surface, start, CellState.START)
+        self._draw_special_marker(surface, goal, CellState.GOAL)
+
+        self.cell_size = original_cell_size
+
+        return surface
+
+    def _draw_animation_performance_box(
+            self,
+            visualization: AlgorithmAnimationVisualization,
+            step: RawAlgorithmStep | None,
+            context: ViewportRenderContext,
+            progress: float,
+    ) -> None:
+        if self.screen is None:
+            return
+
+        font = pygame.font.SysFont("Arial", 16)
+
+        step_path_length = len(step.path) if step is not None else 0
+        closed_count = len(step.closed_nodes) if step is not None else 0
+
+        lines = [
+            f"Algorithm: {visualization.result.algorithm_name}",
+            f"Progress: {progress * 100:.1f}%",
+            f"Path length: {visualization.result.path_length}",
+            f"Current path: {step_path_length}",
+            f"Closed nodes: {closed_count}",
+            f"Time: {visualization.result.execution_time_ms:.3f} ms",
+        ]
+
+        padding = 8
+        line_height = 20
+        box_width = 190
+        box_height = padding * 2 + len(lines) * line_height
+
+        x = context.x + 10
+        y = context.y + 10
+
+        background = pygame.Surface((box_width, box_height))
+        background.set_alpha(180)
+        background.fill((0, 0, 0))
+
+        self.screen.blit(background, (x, y))
+
+        for index, line in enumerate(lines):
+            text_surface = font.render(line, True, (255, 255, 255))
+            self.screen.blit(
+                text_surface,
+                (
+                    x + padding,
+                    y + padding + index * line_height,
+                ),
+            )
+
+    @staticmethod
+    def _get_step_by_progress(
+            steps: list[RawAlgorithmStep],
+            progress: float,
+    ) -> RawAlgorithmStep | None:
+        if not steps:
+            return None
+
+        if len(steps) == 1:
+            return steps[0]
+
+        step_index = int(progress * (len(steps) - 1))
+        return steps[step_index]
 
     def add_overlay(
         self,
@@ -377,12 +584,15 @@ class PygameGridViewer:
 
         return x, y
 
-    def _draw_overlays(self) -> None:
+    def _draw_overlays(
+            self,
+            context: ViewportRenderContext | None = None,
+    ) -> None:
         if self.screen is None:
             return
 
         for overlay in self.overlays:
-            overlay.draw(self.screen)
+            overlay.draw(self.screen, context)
 
     def _draw_base_map(
         self,

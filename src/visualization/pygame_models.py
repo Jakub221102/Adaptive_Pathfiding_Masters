@@ -4,6 +4,7 @@ from enum import Enum
 from pydantic import BaseModel, Field
 
 from src.core.models import PathfindingResult, Position
+from src.core.trace import RawAlgorithmStep
 
 
 class CellState(str, Enum):
@@ -74,3 +75,17 @@ class AlgorithmVisualization(BaseModel):
     path: list[Position]
     color: RGBColor
     result: PathfindingResult | None = None
+
+class ViewportRenderContext(BaseModel):
+    x: int
+    y: int
+    width: int
+    height: int
+    cell_size: int
+
+
+class AlgorithmAnimationVisualization(BaseModel):
+    name: str
+    result: PathfindingResult
+    steps: list[RawAlgorithmStep]
+    color: RGBColor

@@ -11,6 +11,10 @@ def main() -> None:
         scenario_index=400,
         min_optimal_length=100,
         fps=120,
+        step_record_interval=10,
+        cluster_size=32,
+        animated_comparison=True,
+        comparison_animation_time_ms=8000,
     )
 
     experiment = ComparisonExperiment(

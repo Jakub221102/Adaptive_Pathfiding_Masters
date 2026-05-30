@@ -29,3 +29,6 @@ class ExperimentConfig(BaseModel):
     show_cluster_overlay: bool = False
     cluster_size: int = Field(default=32, gt=0)
     show_heatmap_overlay: bool = False
+
+    animated_comparison: bool = False
+    comparison_animation_time_ms: int = Field(default=8000, gt=0)

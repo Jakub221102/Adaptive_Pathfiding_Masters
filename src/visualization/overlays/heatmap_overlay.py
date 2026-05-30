@@ -2,6 +2,7 @@ import pygame
 
 from src.core.trace import RawAlgorithmStep
 from src.visualization.overlays.base_overlay import BaseOverlay
+from src.visualization.pygame_models import ViewportRenderContext
 
 
 class HeatmapOverlay(BaseOverlay):
@@ -19,6 +20,7 @@ class HeatmapOverlay(BaseOverlay):
     def draw(
             self,
             screen: pygame.Surface,
+            context: ViewportRenderContext | None = None,
     ) -> None:
         if not self.visit_counts:
             return
@@ -30,15 +32,19 @@ class HeatmapOverlay(BaseOverlay):
 
         max_visits = max(self.visit_counts.values())
 
+        x_offset = context.x if context is not None else 0
+        y_offset = context.y if context is not None else 0
+        cell_size = context.cell_size if context is not None else self.cell_size
+
         for (row, col), count in self.visit_counts.items():
             intensity = count / max_visits
             color = self._get_heatmap_color(intensity)
 
             rect = pygame.Rect(
-                col * self.cell_size,
-                row * self.cell_size,
-                self.cell_size,
-                self.cell_size,
+                x_offset + col * cell_size,
+                y_offset + row * cell_size,
+                cell_size,
+                cell_size,
             )
 
             pygame.draw.rect(

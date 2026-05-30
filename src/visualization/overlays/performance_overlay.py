@@ -2,6 +2,7 @@ import pygame
 
 from src.core.models import PathfindingResult
 from src.visualization.overlays.base_overlay import BaseOverlay
+from src.visualization.pygame_models import ViewportRenderContext
 
 
 class PerformanceOverlay(BaseOverlay):
@@ -16,10 +17,18 @@ class PerformanceOverlay(BaseOverlay):
         self.y = y
 
     def draw(
-        self,
-        screen: pygame.Surface,
+            self,
+            screen: pygame.Surface,
+            context: ViewportRenderContext | None = None,
     ) -> None:
         font = pygame.font.SysFont("Arial", 16)
+
+        x = self.x
+        y = self.y
+
+        if context is not None:
+            x = context.x + self.x
+            y = context.y + self.y
 
         lines = [
             f"Algorithm: {self.result.algorithm_name}",
@@ -38,14 +47,14 @@ class PerformanceOverlay(BaseOverlay):
         background.set_alpha(180)
         background.fill((0, 0, 0))
 
-        screen.blit(background, (self.x, self.y))
+        screen.blit(background, (x, y))
 
         for index, line in enumerate(lines):
             text_surface = font.render(line, True, (255, 255, 255))
             screen.blit(
                 text_surface,
                 (
-                    self.x + padding,
-                    self.y + padding + index * line_height,
+                    x + padding,
+                    y + padding + index * line_height,
                 ),
             )

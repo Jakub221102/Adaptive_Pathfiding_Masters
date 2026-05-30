@@ -2,7 +2,11 @@ from src.experiments.algorithm_registry import create_algorithm
 from src.experiments.base_experiment import BaseExperiment
 from src.experiments.experiment_config import AlgorithmName, ExperimentConfig
 from src.visualization.overlays.performance_overlay import PerformanceOverlay
-from src.visualization.pygame_models import AlgorithmVisualization, RGBColor
+from src.visualization.pygame_models import (
+    AlgorithmAnimationVisualization,
+    AlgorithmVisualization,
+    RGBColor,
+)
 
 
 class ComparisonExperiment(BaseExperiment):
@@ -29,8 +33,42 @@ class ComparisonExperiment(BaseExperiment):
             title="Algorithm comparison",
         )
 
-        visualizations: list[AlgorithmVisualization] = []
+        if self.config.animated_comparison:
+            animation_visualizations: list[AlgorithmAnimationVisualization] = []
+            colors = self._get_default_colors()
 
+            for index, algorithm_name in enumerate(self.algorithms):
+                algorithm = create_algorithm(
+                    name=algorithm_name,
+                    cluster_size=self.config.cluster_size,
+                )
+
+                result, steps = algorithm.find_path_with_steps(
+                    grid_map=grid_map,
+                    start=scenario.start,
+                    goal=scenario.goal,
+                    step_record_interval=self.config.step_record_interval,
+                )
+
+                animation_visualizations.append(
+                    AlgorithmAnimationVisualization(
+                        name=result.algorithm_name,
+                        result=result,
+                        steps=steps,
+                        color=colors[index],
+                    )
+                )
+
+            viewer.run_grid_animation_comparison_view(
+                start=scenario.start,
+                goal=scenario.goal,
+                visualizations=animation_visualizations,
+                total_animation_time_ms=self.config.comparison_animation_time_ms,
+            )
+
+            return
+
+        visualizations: list[AlgorithmVisualization] = []
         colors = self._get_default_colors()
 
         for index, algorithm_name in enumerate(self.algorithms):
