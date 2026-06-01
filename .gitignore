@@ -56,6 +56,7 @@ htmlcov/
 # Large datasets / maps
 # =========================
 Data/
+Results/
 
 # =========================
 # Temporary experiment outputs
