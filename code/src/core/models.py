@@ -31,10 +31,15 @@ class GridMap(BaseModel):
 class PathfindingResult(BaseModel):
     algorithm_name: str
     found: bool
+
     path: list[Position]
+
     path_length: int
+    path_cost: float
+
     visited_nodes: int
     execution_time_ms: float
+    scanned_nodes: int | None = None
 
 
 class FailedScenarioResult(BaseModel):

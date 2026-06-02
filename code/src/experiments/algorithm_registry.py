@@ -1,6 +1,7 @@
 from code.src.algorithms.astar import AStar
 from code.src.algorithms.base import PathfindingAlgorithm
 from code.src.algorithms.hpa.hpa_star import HPAStar
+from code.src.algorithms.jps import JumpPointSearch
 from code.src.experiments.experiment_config import AlgorithmName
 
 
@@ -19,5 +20,7 @@ def create_algorithm(
                 max_entrances_per_cluster_pair=max_entrances_per_cluster_pair,
                 min_entrance_width=min_entrance_width,
             )
+        case AlgorithmName.JPS:
+            return JumpPointSearch()
         case _:
             raise ValueError(f"Unsupported algorithm: {name}")

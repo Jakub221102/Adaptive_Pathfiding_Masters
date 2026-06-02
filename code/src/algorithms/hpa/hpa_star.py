@@ -1,3 +1,4 @@
+import math
 import time
 
 from code.src.algorithms.base import PathfindingAlgorithm
@@ -158,6 +159,7 @@ class HPAStar(PathfindingAlgorithm):
                 abstract_nodes_visited=0,
                 abstract_path_edge_count=0,
                 refined_path_length=max(len(path) - 1, 0),
+                refined_path_cost=self._calculate_path_cost(path),
                 local_path_cache_hits=cache_hits,
                 local_path_cache_misses=cache_misses,
                 cache_hit_ratio=self._calculate_cache_hit_ratio(
@@ -205,6 +207,7 @@ class HPAStar(PathfindingAlgorithm):
                 abstract_nodes_visited=abstract_result.visited_node_count,
                 abstract_path_edge_count=0,
                 refined_path_length=0,
+                refined_path_cost=0.0,
                 local_path_cache_hits=cache_hits,
                 local_path_cache_misses=cache_misses,
                 cache_hit_ratio=self._calculate_cache_hit_ratio(
@@ -237,6 +240,7 @@ class HPAStar(PathfindingAlgorithm):
             abstract_nodes_visited=abstract_result.visited_node_count,
             abstract_path_edge_count=len(abstract_edges),
             refined_path_length=max(len(refined_path) - 1, 0),
+            refined_path_cost=self._calculate_path_cost(refined_path),
             local_path_cache_hits=cache_hits,
             local_path_cache_misses=cache_misses,
             cache_hit_ratio=self._calculate_cache_hit_ratio(
@@ -411,6 +415,29 @@ class HPAStar(PathfindingAlgorithm):
 
         return hits / total
 
+    @staticmethod
+    def _calculate_path_cost(
+            path: list[Position],
+    ) -> float:
+        if len(path) < 2:
+            return 0.0
+
+        cost = 0.0
+
+        for index in range(len(path) - 1):
+            current = path[index]
+            next_position = path[index + 1]
+
+            row_diff = abs(current.row - next_position.row)
+            col_diff = abs(current.col - next_position.col)
+
+            if row_diff == 1 and col_diff == 1:
+                cost += math.sqrt(2)
+            else:
+                cost += 1.0
+
+        return cost
+
     def _build_result(
             self,
             path: list[Position],
@@ -425,6 +452,7 @@ class HPAStar(PathfindingAlgorithm):
             found=found,
             path=path,
             path_length=max(len(path) - 1, 0),
+            path_cost=self._calculate_path_cost(path),
             visited_nodes=visited_nodes,
             execution_time_ms=(end_time - start_time) * 1000,
         )

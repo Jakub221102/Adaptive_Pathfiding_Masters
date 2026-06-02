@@ -9,6 +9,7 @@ from code.src.visualization.pygame_models import ViewerMode
 class AlgorithmName(str, Enum):
     ASTAR = "astar"
     HPA_STAR = "hpa_star"
+    JPS = "jps"
 
 
 class ExperimentConfig(BaseModel):
@@ -30,7 +31,7 @@ class ExperimentConfig(BaseModel):
     cluster_size: int = Field(default=32, gt=0)
     max_entrances_per_cluster_pair: int = Field(default=2, gt=0)
     min_entrance_width: int = Field(default=1, gt=0)
-    
+
     show_heatmap_overlay: bool = False
     animated_comparison: bool = False
     comparison_animation_time_ms: int = Field(default=8000, gt=0)

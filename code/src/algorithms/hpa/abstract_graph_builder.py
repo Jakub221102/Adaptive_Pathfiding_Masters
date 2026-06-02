@@ -1,3 +1,5 @@
+import math
+
 from code.src.algorithms.hpa.cluster_builder import build_allowed_positions_for_cluster
 from code.src.algorithms.hpa.local_path_cache import LocalPathCache
 from code.src.core.hpa_models import AbstractEdge, AbstractGraph, AbstractNode, Cluster, Entrance
@@ -160,13 +162,36 @@ class AbstractGraphBuilder:
         return edges
 
     @staticmethod
+    def _calculate_path_cost(
+            path: list,
+    ) -> float:
+        if len(path) < 2:
+            return 0.0
+
+        cost = 0.0
+
+        for index in range(len(path) - 1):
+            current = path[index]
+            next_position = path[index + 1]
+
+            row_diff = abs(current.row - next_position.row)
+            col_diff = abs(current.col - next_position.col)
+
+            if row_diff == 1 and col_diff == 1:
+                cost += math.sqrt(2)
+            else:
+                cost += 1.0
+
+        return cost
+
+    @staticmethod
     def _add_bidirectional_edge(
             edges: list[AbstractEdge],
             from_node: AbstractNode,
             to_node: AbstractNode,
             path: list,
     ) -> None:
-        cost = float(len(path) - 1)
+        cost = AbstractGraphBuilder._calculate_path_cost(path)
 
         edges.append(
             AbstractEdge(

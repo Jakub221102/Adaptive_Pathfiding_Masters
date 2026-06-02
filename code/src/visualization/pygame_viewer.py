@@ -385,6 +385,7 @@ class PygameGridViewer:
             f"Algorithm: {visualization.result.algorithm_name}",
             f"Progress: {progress * 100:.1f}%",
             f"Path length: {visualization.result.path_length}",
+            f"Path cost: {visualization.result.path_cost:.3f}",
             f"Current path: {step_path_length}",
             f"Closed nodes: {closed_count}",
             f"Time: {visualization.result.execution_time_ms:.3f} ms",
@@ -549,6 +550,7 @@ class PygameGridViewer:
             f"Algorithm: {result.algorithm_name}",
             f"Found: {result.found}",
             f"Path length: {result.path_length}",
+            f"Path cost: {result.path_cost:.3f}",
             f"Visited nodes: {result.visited_nodes}",
             f"Time: {result.execution_time_ms:.3f} ms",
         ]

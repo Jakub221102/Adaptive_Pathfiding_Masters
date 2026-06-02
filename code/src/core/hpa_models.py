@@ -67,6 +67,7 @@ class HPAQueryStats(BaseModel):
 
     abstract_path_edge_count: int = 0
     refined_path_length: int = 0
+    refined_path_cost: float = 0.0
 
     local_path_cache_hits: int = 0
     local_path_cache_misses: int = 0

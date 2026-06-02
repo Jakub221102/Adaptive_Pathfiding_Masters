@@ -1,39 +1,10 @@
 import heapq
+import math
 import time
 
 from code.src.algorithms.base import PathfindingAlgorithm
 from code.src.core.models import GridMap, PathfindingResult, Position
 from code.src.core.trace import GridNode, RawAlgorithmStep
-
-
-def _get_neighbors(
-        grid_map: GridMap,
-        node: GridNode,
-        allowed_positions: set[GridNode] | None = None,
-) -> list[GridNode]:
-    row, col = node
-
-    candidates = [
-        (row + 1, col),
-        (row - 1, col),
-        (row, col + 1),
-        (row, col - 1),
-    ]
-
-    result: list[GridNode] = []
-
-    for candidate_row, candidate_col in candidates:
-        candidate = (candidate_row, candidate_col)
-
-        if allowed_positions is not None and candidate not in allowed_positions:
-            continue
-
-        position = Position(row=candidate_row, col=candidate_col)
-
-        if grid_map.in_bounds(position) and grid_map.is_walkable(position):
-            result.append(candidate)
-
-    return result
 
 
 class AStar(PathfindingAlgorithm):
@@ -164,7 +135,10 @@ class AStar(PathfindingAlgorithm):
                 if neighbor in closed_lookup:
                     continue
 
-                tentative_g = g_score[current] + 1
+                tentative_g = g_score[current] + self._movement_cost(
+                    current=current,
+                    neighbor=neighbor,
+                )
 
                 if neighbor not in g_score or tentative_g < g_score[neighbor]:
                     came_from[neighbor] = current
@@ -202,6 +176,10 @@ class AStar(PathfindingAlgorithm):
             (row - 1, col),
             (row, col + 1),
             (row, col - 1),
+            (row + 1, col + 1),
+            (row + 1, col - 1),
+            (row - 1, col + 1),
+            (row - 1, col - 1),
         ]
 
         result: list[GridNode] = []
@@ -220,11 +198,50 @@ class AStar(PathfindingAlgorithm):
         return result
 
     @staticmethod
+    def _calculate_path_cost(
+            path: list[Position],
+    ) -> float:
+        if len(path) < 2:
+            return 0.0
+
+        cost = 0.0
+
+        for index in range(len(path) - 1):
+            current = path[index]
+            next_position = path[index + 1]
+
+            row_diff = abs(current.row - next_position.row)
+            col_diff = abs(current.col - next_position.col)
+
+            if row_diff == 1 and col_diff == 1:
+                cost += math.sqrt(2)
+            else:
+                cost += 1.0
+
+        return cost
+
+    @staticmethod
+    def _movement_cost(
+            current: GridNode,
+            neighbor: GridNode,
+    ) -> float:
+        row_diff = abs(current[0] - neighbor[0])
+        col_diff = abs(current[1] - neighbor[1])
+
+        if row_diff == 1 and col_diff == 1:
+            return math.sqrt(2)
+
+        return 1.0
+
+    @staticmethod
     def _heuristic(
             current: GridNode,
             goal: GridNode,
     ) -> float:
-        return abs(current[0] - goal[0]) + abs(current[1] - goal[1])
+        dx = abs(current[0] - goal[0])
+        dy = abs(current[1] - goal[1])
+
+        return max(dx, dy) + (math.sqrt(2) - 1) * min(dx, dy)
 
     @staticmethod
     def _reconstruct_path(
@@ -254,6 +271,7 @@ class AStar(PathfindingAlgorithm):
             found=found,
             path=path,
             path_length=max(len(path) - 1, 0),
+            path_cost=self._calculate_path_cost(path),
             visited_nodes=visited_nodes,
             execution_time_ms=(end_time - start_time) * 1000,
         )

@@ -74,5 +74,6 @@ class PathfindingExperiment(BaseExperiment):
                 goal=scenario.goal,
                 path=result.path,
             )
+
         else:
             raise ValueError(f"Unsupported viewer mode: {self.config.viewer_mode}")

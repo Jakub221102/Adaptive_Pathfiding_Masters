@@ -9,13 +9,10 @@ def main() -> None:
     config = ExperimentConfig(
         map_path=Path("../../Data/bg512-map/AR0204SR.map"),
         scen_path=Path("../../Data/bg512-scen/AR0204SR.map.scen"),
-        algorithm=AlgorithmName.HPA_STAR,
+        algorithm=AlgorithmName.JPS,
         viewer_mode=ViewerMode.STATIC,
         scenario_index=19,
         min_optimal_length=100,
-        cluster_size=128,
-        max_entrances_per_cluster_pair=4,
-        show_cluster_overlay=True,
     )
 
     experiment = PathfindingExperiment(config)

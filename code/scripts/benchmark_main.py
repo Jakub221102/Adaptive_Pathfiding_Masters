@@ -10,9 +10,13 @@ def main() -> None:
         scen_path=Path("../../Data/bg512-scen/AR0204SR.map.scen"),
         min_optimal_length=100,
         cluster_size=32,
+        max_entrances_per_cluster_pair=2,
         benchmark_scenarios=100,
-        results_dir=Path("../../Results/HPA_vs_ASTAR"),
-        benchmark_output_file=f"cluster_{32}_scenarios_{100}.csv",
+        results_dir=Path("../../Results/static_algorithms"),
+        benchmark_output_file=(
+            "astar_hpa_jpa_cluster_32_scenarios_100.csv"
+        )
+
     )
 
     experiment = BenchmarkExperiment(
@@ -20,6 +24,7 @@ def main() -> None:
         algorithms=[
             AlgorithmName.ASTAR,
             AlgorithmName.HPA_STAR,
+            AlgorithmName.JPS,
         ],
     )
 

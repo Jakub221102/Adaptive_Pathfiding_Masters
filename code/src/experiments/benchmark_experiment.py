@@ -77,6 +77,8 @@ class BenchmarkExperiment(BaseExperiment):
             path_length=pathfinding_result.path_length,
             visited_nodes=pathfinding_result.visited_nodes,
             execution_time_ms=pathfinding_result.execution_time_ms,
+            path_cost=pathfinding_result.path_cost,
+            scanned_nodes=pathfinding_result.scanned_nodes,
         )
 
         if not isinstance(algorithm, HPAStar):
@@ -103,6 +105,9 @@ class BenchmarkExperiment(BaseExperiment):
             abstract_search_time_ms=query_stats.abstract_search_time_ms,
             refinement_time_ms=query_stats.refinement_time_ms,
             query_time_ms=query_stats.query_time_ms,
+            refined_path_cost=query_stats.refined_path_cost,
+            path_cost=pathfinding_result.path_cost,
+            scanned_nodes=pathfinding_result.scanned_nodes,
         )
 
     @staticmethod
@@ -138,12 +143,43 @@ class BenchmarkExperiment(BaseExperiment):
                 result.visited_nodes for result in found_results
             ) / len(found_results)
 
+            avg_path_cost = sum(
+                result.path_cost for result in found_results
+            ) / len(found_results)
+
+            results_with_optimal = [
+                result for result in found_results
+                if result.optimal_length is not None
+            ]
+
+            avg_cost_error = 0.0
+
+            if results_with_optimal:
+                avg_cost_error = sum(
+                    result.path_cost - (result.optimal_length or 0.0)
+                    for result in results_with_optimal
+                ) / len(results_with_optimal)
+
             print(f"\n{algorithm_name}")
             print(f"  scenarios: {len(algorithm_results)}")
             print(f"  found: {len(found_results)}")
             print(f"  avg_execution_time_ms: {avg_execution_time:.3f}")
             print(f"  avg_path_length: {avg_path_length:.3f}")
+            print(f"  avg_path_cost: {avg_path_cost:.3f}")
+            print(f"  avg_cost_error: {avg_cost_error:.3f}")
             print(f"  avg_visited_nodes: {avg_visited_nodes:.3f}")
+
+            scanned_results = [
+                result for result in found_results
+                if result.scanned_nodes is not None
+            ]
+
+            if scanned_results:
+                avg_scanned_nodes = sum(
+                    result.scanned_nodes or 0 for result in scanned_results
+                ) / len(scanned_results)
+
+                print(f"  avg_scanned_nodes: {avg_scanned_nodes:.3f}")
 
             hpa_results = [
                 result for result in found_results

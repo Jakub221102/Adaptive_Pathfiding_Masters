@@ -8,6 +8,7 @@ class BenchmarkResult(BaseModel):
 
     found: bool
     path_length: int
+    path_cost: float
     visited_nodes: int
     execution_time_ms: float
 
@@ -16,6 +17,8 @@ class BenchmarkResult(BaseModel):
     abstract_nodes_visited: int | None = None
     abstract_path_edge_count: int | None = None
     refined_path_length: int | None = None
+    refined_path_cost: float | None = None
+    scanned_nodes: int | None = None
 
     local_path_cache_hits: int | None = None
     local_path_cache_misses: int | None = None
