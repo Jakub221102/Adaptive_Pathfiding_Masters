@@ -15,7 +15,7 @@ def run_cluster_size_benchmark(
             min_optimal_length=100,
             cluster_size=cluster_size,
             benchmark_scenarios=benchmark_scenarios,
-            results_dir=Path("../../Results/cluster_size"),
+            results_dir=Path("../../Results/static_algorithms/cluster_size"),
             benchmark_output_file=f"hpa_cluster_{cluster_size}.csv",
         )
 
@@ -32,7 +32,7 @@ def run_cluster_size_benchmark(
 
 def main() -> None:
     run_cluster_size_benchmark(
-        cluster_sizes=[16, 32, 64, 128],
+        cluster_sizes=[8, 16, 32, 64, 128],
         benchmark_scenarios=100,
     )
 

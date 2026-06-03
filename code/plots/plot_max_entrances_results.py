@@ -3,8 +3,8 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import pandas as pd
 
-RESULTS_DIR = Path("../../Results/max_entrances")
-PLOTS_DIR = Path("../../Results/plots/max_entrances")
+RESULTS_DIR = Path("../../Results/static_algorithms/max_entrances")
+PLOTS_DIR = Path("../../Results/plots/static_algorithms/astar_hpa_jps/max_entrances")
 
 
 def main() -> None:

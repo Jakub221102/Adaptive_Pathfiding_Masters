@@ -17,7 +17,7 @@ def run_max_entrances_benchmark(
             cluster_size=cluster_size,
             max_entrances_per_cluster_pair=max_entrances,
             benchmark_scenarios=benchmark_scenarios,
-            results_dir=Path("../../Results/max_entrances"),
+            results_dir=Path("../../Results/static_algorithms/max_entrances"),
             benchmark_output_file=(
                 f"hpa_cluster_{cluster_size}_entrances_{max_entrances}.csv"
             ),

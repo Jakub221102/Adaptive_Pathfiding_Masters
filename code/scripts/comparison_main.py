@@ -22,6 +22,7 @@ def main() -> None:
         algorithms=[
             AlgorithmName.ASTAR,
             AlgorithmName.HPA_STAR,
+            AlgorithmName.JPS
         ],
     )
 

@@ -3,8 +3,8 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import pandas as pd
 
-RESULTS_DIR = Path("../../Results/cluster_size")
-PLOTS_DIR = Path("../../Results/plots/cluster_size")
+RESULTS_DIR = Path("../../Results/static_algorithms/cluster_size")
+PLOTS_DIR = Path("../../Results/plots/static_algorithms/astar_hpa_jps/cluster_size")
 
 
 def main() -> None:

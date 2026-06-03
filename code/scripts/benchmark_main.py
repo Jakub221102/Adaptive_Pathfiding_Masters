@@ -14,7 +14,7 @@ def main() -> None:
         benchmark_scenarios=100,
         results_dir=Path("../../Results/static_algorithms"),
         benchmark_output_file=(
-            "astar_hpa_jpa_cluster_32_scenarios_100.csv"
+            "astar_hpa_jps_cluster_32_scenarios_100.csv"
         )
 
     )
