@@ -9,10 +9,12 @@ def main() -> None:
     config = ExperimentConfig(
         map_path=Path("../../Data/bg512-map/AR0204SR.map"),
         scen_path=Path("../../Data/bg512-scen/AR0204SR.map.scen"),
-        algorithm=AlgorithmName.JPS,
-        viewer_mode=ViewerMode.STATIC,
-        scenario_index=19,
-        min_optimal_length=100,
+        algorithm=AlgorithmName.ASTAR,
+        viewer_mode=ViewerMode.ANIMATED,
+        scenario_index=1,
+        min_optimal_length=400,
+        show_heatmap_overlay=True,
+        step_record_interval=5,
     )
 
     experiment = PathfindingExperiment(config)

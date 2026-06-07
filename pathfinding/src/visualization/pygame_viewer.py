@@ -117,6 +117,7 @@ class PygameGridViewer:
                     CellState.CURRENT,
                 )
 
+            self._update_animation_step_overlays(step_index)
             self._draw_overlays()
 
             if current_step.path:
@@ -758,6 +759,13 @@ class PygameGridViewer:
         y = row * self.cell_size + self.cell_size // 2
 
         return x, y
+
+    def _update_animation_step_overlays(self, step_index: int) -> None:
+        for overlay in self.overlays:
+            set_step_index = getattr(overlay, "set_animation_step_index", None)
+
+            if callable(set_step_index):
+                set_step_index(step_index)
 
     def _draw_overlays(
             self,
