@@ -9,12 +9,15 @@ from pathfinding.src.core.trace import RawAlgorithmStep
 class CellState(str, Enum):
     EMPTY = "empty"
     WALL = "wall"
+    DYNAMIC_WALL = "dynamic_wall"
     START = "start"
     GOAL = "goal"
     OPEN = "open"
     CLOSED = "closed"
     PATH = "path"
+    TRAVELLED_PATH = "travelled_path"
     CURRENT = "current"
+    AGENT = "agent"
 
 
 class RGBColor(BaseModel):
@@ -29,12 +32,15 @@ class RGBColor(BaseModel):
 class ViewerColors(BaseModel):
     empty: RGBColor = RGBColor(r=245, g=245, b=245)
     wall: RGBColor = RGBColor(r=35, g=35, b=35)
+    dynamic_wall: RGBColor = RGBColor(r=220, g=90, b=20)
     start: RGBColor = RGBColor(r=0, g=200, b=0)
     goal: RGBColor = RGBColor(r=220, g=0, b=0)
     open: RGBColor = RGBColor(r=80, g=160, b=255)
     closed: RGBColor = RGBColor(r=120, g=120, b=120)
     path: RGBColor = RGBColor(r=255, g=210, b=0)
+    travelled_path: RGBColor = RGBColor(r=90, g=170, b=90)
     current: RGBColor = RGBColor(r=180, g=0, b=255)
+    agent: RGBColor = RGBColor(r=0, g=120, b=255)
     grid_line: RGBColor = RGBColor(r=210, g=210, b=210)
     background: RGBColor = RGBColor(r=20, g=20, b=20)
 

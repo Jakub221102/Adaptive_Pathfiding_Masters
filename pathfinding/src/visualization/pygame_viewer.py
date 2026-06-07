@@ -5,6 +5,7 @@ import pygame
 from pathfinding.src.core.models import GridMap, Position
 from pathfinding.src.core.trace import RawAlgorithmStep
 from pathfinding.src.visualization.overlays.base_overlay import BaseOverlay
+from pathfinding.src.experiments.dynamic_simulation import DynamicPlaybackFrame
 from pathfinding.src.visualization.pygame_models import (
     AlgorithmVisualization,
     CellState,
@@ -127,6 +128,172 @@ class PygameGridViewer:
             self._finalize_frame()
 
         pygame.quit()
+
+    def initialize_for_dynamic_animation(self) -> None:
+        self._initialize_pygame()
+
+    def finalize_dynamic_animation(self) -> None:
+        pygame.quit()
+
+    def show_dynamic_frame(
+            self,
+            start: Position,
+            goal: Position,
+            frame: DynamicPlaybackFrame,
+    ) -> bool:
+        if self.screen is None:
+            return False
+
+        if not self._handle_events():
+            return False
+
+        self._render_dynamic_frame(
+            surface=self.screen,
+            start=start,
+            goal=goal,
+            frame=frame,
+        )
+        self._finalize_dynamic_frame()
+        return True
+
+    def run_dynamic_simulation_animation(
+            self,
+            start: Position,
+            goal: Position,
+            frames: list[DynamicPlaybackFrame],
+            search_frame_delay_ms: int = 20,
+            movement_frame_delay_ms: int = 1,
+            movement_steps_per_frame: int = 1,
+            obstacle_frame_delay_ms: int = 1,
+    ) -> None:
+        if not frames:
+            self.run_static_path_view(start=start, goal=goal, path=[])
+            return
+
+        self.initialize_for_dynamic_animation()
+
+        running = True
+        frame_index = 0
+        last_frame_time = pygame.time.get_ticks()
+
+        while running:
+            current_frame = frames[frame_index]
+            frame_delay_ms = self._dynamic_frame_delay_ms(
+                frame=current_frame,
+                search_frame_delay_ms=search_frame_delay_ms,
+                movement_frame_delay_ms=movement_frame_delay_ms,
+                obstacle_frame_delay_ms=obstacle_frame_delay_ms,
+            )
+
+            running = self.show_dynamic_frame(
+                start=start,
+                goal=goal,
+                frame=current_frame,
+            )
+
+            if not running:
+                break
+
+            now = pygame.time.get_ticks()
+
+            if frame_index < len(frames) - 1 and now - last_frame_time >= frame_delay_ms:
+                frame_advance = (
+                    movement_steps_per_frame
+                    if current_frame.frame_kind == "move"
+                    else 1
+                )
+                frame_index = min(
+                    frame_index + frame_advance,
+                    len(frames) - 1,
+                )
+                last_frame_time = now
+
+        self.finalize_dynamic_animation()
+
+    def _render_dynamic_frame(
+            self,
+            surface: pygame.Surface,
+            start: Position,
+            goal: Position,
+            frame: DynamicPlaybackFrame,
+    ) -> None:
+        self._draw_base_map(
+            surface,
+            dynamic_blocked=frame.dynamic_blocked,
+        )
+
+        if frame.search_step is not None:
+            self._draw_nodes(
+                surface,
+                frame.search_step.closed_nodes,
+                CellState.CLOSED,
+            )
+            self._draw_nodes(
+                surface,
+                frame.search_step.open_nodes,
+                CellState.OPEN,
+            )
+
+            if frame.search_step.current is not None:
+                row, col = frame.search_step.current
+                self._draw_cell_by_coordinates(
+                    surface,
+                    row,
+                    col,
+                    CellState.CURRENT,
+                )
+
+        if frame.new_obstacle_positions:
+            self._draw_positions(
+                surface,
+                frame.new_obstacle_positions,
+                CellState.DYNAMIC_WALL,
+            )
+
+        if frame.travelled_path:
+            self._draw_path(
+                surface,
+                frame.travelled_path,
+                color=self.colors.travelled_path.as_tuple(),
+            )
+
+        if frame.planned_path and frame.search_step is None:
+            self._draw_path(
+                surface,
+                frame.planned_path,
+                color=self.colors.path.as_tuple(),
+            )
+
+        if frame.search_step is not None and frame.search_step.path:
+            self._draw_path(
+                surface,
+                frame.search_step.path,
+            )
+
+        self._draw_special_marker(surface, start, CellState.START)
+        self._draw_special_marker(surface, goal, CellState.GOAL)
+        self._draw_special_marker(
+            surface,
+            frame.agent_position,
+            CellState.AGENT,
+        )
+        self._draw_overlays()
+        self._draw_status_box(frame.status_text)
+
+    @staticmethod
+    def _dynamic_frame_delay_ms(
+            frame: DynamicPlaybackFrame,
+            search_frame_delay_ms: int,
+            movement_frame_delay_ms: int,
+            obstacle_frame_delay_ms: int,
+    ) -> int:
+        if frame.frame_kind == "move":
+            return movement_frame_delay_ms
+
+        if frame.frame_kind in {"obstacle", "path_update"}:
+            return obstacle_frame_delay_ms
+
+        return search_frame_delay_ms
 
     def run_multi_path_view(
             self,
@@ -497,6 +664,12 @@ class PygameGridViewer:
         if self.clock is not None:
             self.clock.tick(self.config.fps)
 
+    def _finalize_dynamic_frame(self) -> None:
+        pygame.display.flip()
+
+        if self.clock is not None:
+            self.clock.tick(0)
+
     def _calculate_cell_size(self) -> int:
         if self.config.cell_size is not None:
             return self.config.cell_size
@@ -599,18 +772,21 @@ class PygameGridViewer:
     def _draw_base_map(
             self,
             surface: pygame.Surface,
+            dynamic_blocked: set[tuple[int, int]] | None = None,
     ) -> None:
         surface.fill(self.colors.background.as_tuple())
 
         for row in range(self.grid_map.height):
             for col in range(self.grid_map.width):
                 position = Position(row=row, col=col)
+                cell_key = (row, col)
 
-                state = (
-                    CellState.EMPTY
-                    if self.grid_map.is_walkable(position)
-                    else CellState.WALL
-                )
+                if dynamic_blocked and cell_key in dynamic_blocked:
+                    state = CellState.DYNAMIC_WALL
+                elif self.grid_map.is_walkable(position):
+                    state = CellState.EMPTY
+                else:
+                    state = CellState.WALL
 
                 self._draw_cell(
                     surface=surface,
@@ -751,12 +927,48 @@ class PygameGridViewer:
             width=max(self.cell_size * 2, 2),
         )
 
+    def _draw_status_box(
+            self,
+            status_text: str,
+    ) -> None:
+        if self.screen is None or not status_text:
+            return
+
+        font = pygame.font.SysFont("Arial", 18)
+        padding = 10
+        line_height = 24
+        lines = status_text.splitlines() or [status_text]
+
+        box_width = max(font.size(line)[0] for line in lines) + padding * 2
+        box_height = padding * 2 + len(lines) * line_height
+
+        background = pygame.Surface((box_width, box_height))
+        background.set_alpha(200)
+        background.fill((0, 0, 0))
+
+        x = 10
+        y = self.screen.get_height() - box_height - 10
+
+        self.screen.blit(background, (x, y))
+
+        for index, line in enumerate(lines):
+            text_surface = font.render(line, True, (255, 255, 255))
+            self.screen.blit(
+                text_surface,
+                (
+                    x + padding,
+                    y + padding + index * line_height,
+                ),
+            )
+
     def _get_color(self, state: CellState) -> tuple[int, int, int]:
         match state:
             case CellState.EMPTY:
                 return self.colors.empty.as_tuple()
             case CellState.WALL:
                 return self.colors.wall.as_tuple()
+            case CellState.DYNAMIC_WALL:
+                return self.colors.dynamic_wall.as_tuple()
             case CellState.START:
                 return self.colors.start.as_tuple()
             case CellState.GOAL:
@@ -767,7 +979,11 @@ class PygameGridViewer:
                 return self.colors.closed.as_tuple()
             case CellState.PATH:
                 return self.colors.path.as_tuple()
+            case CellState.TRAVELLED_PATH:
+                return self.colors.travelled_path.as_tuple()
             case CellState.CURRENT:
                 return self.colors.current.as_tuple()
+            case CellState.AGENT:
+                return self.colors.agent.as_tuple()
             case _:
                 return self.colors.empty.as_tuple()

@@ -1,5 +1,6 @@
 from pathfinding.src.algorithms.astar import AStar
 from pathfinding.src.algorithms.base import PathfindingAlgorithm
+from pathfinding.src.algorithms.dstar_lite import DStarLite
 from pathfinding.src.algorithms.hpa.hpa_star import HPAStar
 from pathfinding.src.algorithms.jps import JumpPointSearch
 from pathfinding.src.experiments.experiment_config import AlgorithmName
@@ -22,5 +23,7 @@ def create_algorithm(
             )
         case AlgorithmName.JPS:
             return JumpPointSearch()
+        case AlgorithmName.DSTAR_LITE:
+            return DStarLite()
         case _:
             raise ValueError(f"Unsupported algorithm: {name}")

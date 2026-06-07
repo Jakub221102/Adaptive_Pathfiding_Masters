@@ -10,6 +10,7 @@ class AlgorithmName(str, Enum):
     ASTAR = "astar"
     HPA_STAR = "hpa_star"
     JPS = "jps"
+    DSTAR_LITE = "dstar_lite"
 
 
 class ExperimentConfig(BaseModel):
@@ -26,6 +27,11 @@ class ExperimentConfig(BaseModel):
     step_delay_ms: int = Field(default=1, ge=0)
     steps_per_frame: int = Field(default=100, gt=0)
     step_record_interval: int = Field(default=10, gt=0)
+    movement_hold_frames: int = Field(default=1, ge=1)
+    movement_frame_delay_ms: int = Field(default=1, ge=0)
+    movement_steps_per_frame: int = Field(default=1, gt=0)
+    obstacle_hold_frames: int = Field(default=3, ge=1)
+    obstacle_frame_delay_ms: int = Field(default=1, ge=0)
 
     show_cluster_overlay: bool = False
     cluster_size: int = Field(default=32, gt=0)
