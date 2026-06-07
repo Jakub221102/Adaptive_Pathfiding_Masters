@@ -51,6 +51,7 @@ htmlcov/
 # Local configs
 # =========================
 .env
+.cursor
 
 # =========================
 # Large datasets / maps
