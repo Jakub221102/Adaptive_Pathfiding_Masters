@@ -26,6 +26,9 @@ class DStarLite(PathfindingAlgorithm):
         self._open_lookup: set[GridNode] = set()
         self._counter = 0
         self._expanded_nodes = 0
+        self._last_steps: list[RawAlgorithmStep] = []
+        self._record_steps: bool = False
+        self._step_record_interval: int = 10
 
     def find_path(
             self,
@@ -53,12 +56,29 @@ class DStarLite(PathfindingAlgorithm):
             goal: Position,
             step_record_interval: int = 10,
     ) -> tuple[PathfindingResult, list[RawAlgorithmStep]]:
+        self._record_steps = True
+        self._step_record_interval = step_record_interval
+        self._last_steps = []
         result = self.find_path(
             grid_map=grid_map,
             start=start,
             goal=goal,
         )
-        return result, []
+        steps = list(self._last_steps)
+        self._record_steps = False
+        return result, steps
+
+    def replan_with_steps(
+            self,
+            step_record_interval: int = 10,
+    ) -> tuple[PathfindingResult, list[RawAlgorithmStep]]:
+        self._record_steps = True
+        self._step_record_interval = step_record_interval
+        self._last_steps = []
+        result = self.replan()
+        steps = list(self._last_steps)
+        self._record_steps = False
+        return result, steps
 
     def replan(self) -> PathfindingResult:
         if self._grid_map is None or self._start is None or self._goal is None:
@@ -159,6 +179,10 @@ class DStarLite(PathfindingAlgorithm):
 
             _, node = self._pop()
             expanded_nodes += 1
+
+            if expanded_nodes % self._step_record_interval == 0:
+                self._record_algorithm_step(current=node)
+
             node_key = self._calculate_key(node)
 
             if node_key > top_key:
@@ -175,6 +199,7 @@ class DStarLite(PathfindingAlgorithm):
                 for predecessor in self._get_pred(node):
                     self._update_vertex(predecessor)
 
+        self._record_algorithm_step(current=self._start_node)
         return expanded_nodes
 
     def _extract_path(self) -> list[Position]:
@@ -192,8 +217,13 @@ class DStarLite(PathfindingAlgorithm):
 
         path = [self._start]
         current_node = self._start_node
+        visited: set[GridNode] = set()
 
         while current_node != self._goal_node:
+            if current_node in visited:
+                return []
+            visited.add(current_node)
+
             successors = self._get_succ(current_node)
 
             if not successors:
@@ -237,14 +267,35 @@ class DStarLite(PathfindingAlgorithm):
         if not self._is_walkable(node):
             return INF
 
-        predecessors = self._get_pred(node)
+        successors = self._get_succ(node)
 
-        if not predecessors:
+        if not successors:
             return INF
 
         return min(
-            AStar._movement_cost(predecessor, node) + self._g.get(predecessor, INF)
-            for predecessor in predecessors
+            AStar._movement_cost(node, successor) + self._g.get(successor, INF)
+            for successor in successors
+        )
+
+    def _record_algorithm_step(self, current: GridNode | None) -> None:
+        if not self._record_steps:
+            return
+
+        closed_nodes = {
+            node
+            for node, value in self._g.items()
+            if value < INF
+        }
+
+        open_nodes = set(self._open_lookup)
+
+        self._last_steps.append(
+            RawAlgorithmStep(
+                current=current,
+                open_nodes=frozenset(open_nodes),
+                closed_nodes=frozenset(closed_nodes),
+                path=tuple(),
+            )
         )
 
     def _calculate_key(self, node: GridNode) -> tuple[float, float]:

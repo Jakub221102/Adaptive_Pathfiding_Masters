@@ -312,12 +312,12 @@ def _plan_path(
         step_record_interval: int,
 ):
     if isinstance(algorithm, DStarLite):
-        result = algorithm.find_path(
+        return algorithm.find_path_with_steps(
             grid_map=dynamic_map,
             start=start,
             goal=goal,
+            step_record_interval=step_record_interval,
         )
-        return result, []
 
     return algorithm.find_path_with_steps(
         grid_map=dynamic_map,
@@ -335,8 +335,9 @@ def _replan_path(
         step_record_interval: int,
 ):
     if isinstance(algorithm, DStarLite):
-        result = algorithm.replan()
-        return result, []
+        return algorithm.replan_with_steps(
+            step_record_interval=step_record_interval,
+        )
 
     return algorithm.find_path_with_steps(
         grid_map=dynamic_map,
@@ -471,11 +472,12 @@ def _create_replan_keyframe(
 ) -> DynamicSimulationKeyframe:
     if isinstance(algorithm, DStarLite):
         return DynamicSimulationKeyframe(
-            frame_type="path_update",
+            frame_type="search",
             agent_position=agent_position,
             planned_path=planned_path,
             travelled_path=list(travelled_path),
             dynamic_blocked=set(dynamic_map.dynamic_blocked),
+            search_steps=search_steps,
             status_text=f"D* Lite replanning #{replanning_count}",
         )
 

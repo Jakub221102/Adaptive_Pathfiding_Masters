@@ -125,3 +125,55 @@ def test_dstar_lite_replan_after_dynamic_block() -> None:
     assert replanned_result.found is True
     assert replanned_result.path[-1] == goal
     assert replanned_result.path_cost >= initial_result.path_cost
+
+
+def test_dstar_lite_find_path_with_steps_returns_trace() -> None:
+    grid_map = build_grid_map(
+        [
+            [0, 0, 0],
+            [0, 0, 0],
+            [0, 0, 0],
+        ]
+    )
+
+    result, steps = DStarLite().find_path_with_steps(
+        grid_map=grid_map,
+        start=Position(row=0, col=0),
+        goal=Position(row=2, col=2),
+        step_record_interval=1,
+    )
+
+    assert result.found is True
+    assert len(steps) > 0
+    assert any(step.current is not None for step in steps)
+
+
+def test_dstar_lite_replan_with_steps_returns_trace_after_dynamic_block() -> None:
+    grid_map = build_grid_map(
+        [
+            [0, 0, 0, 0, 0],
+            [0, 1, 1, 1, 0],
+            [0, 0, 0, 0, 0],
+        ]
+    )
+    dynamic_map = DynamicGridMap(base_map=grid_map)
+
+    start = Position(row=0, col=0)
+    goal = Position(row=0, col=4)
+
+    dstar = DStarLite()
+    initial_result = dstar.find_path(
+        grid_map=dynamic_map,
+        start=start,
+        goal=goal,
+    )
+
+    assert initial_result.found is True
+
+    dynamic_map.block_cell(Position(row=0, col=2))
+    dstar.update_cell(Position(row=0, col=2))
+
+    result, steps = dstar.replan_with_steps(step_record_interval=1)
+
+    assert result.found is True
+    assert len(steps) > 0
