@@ -38,6 +38,7 @@ class ExperimentConfig(BaseModel):
     wait_when_no_path: bool = True
     max_wait_steps: int = Field(default=30, ge=0)
     max_stuck_steps: int = Field(default=50, ge=0)
+    max_simulation_steps: int | None = Field(default=None, gt=0)
     moving_obstacle_prediction_steps: int = Field(default=0, ge=0)
     moving_obstacle_collision_policy: MovingObstacleCollisionPolicy = (
         MovingObstacleCollisionPolicy.PUSH_AGENT

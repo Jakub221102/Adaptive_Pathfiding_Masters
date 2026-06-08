@@ -58,10 +58,12 @@ def run_dynamic_simulation(
         wait_when_no_path: bool = True,
         max_wait_steps: int = 30,
         max_stuck_steps: int = 50,
+        max_simulation_steps: int | None = None,
         moving_obstacle_collision_policy: MovingObstacleCollisionPolicy = (
             MovingObstacleCollisionPolicy.PUSH_AGENT
         ),
         moving_obstacle_prediction_steps: int = 0,
+        record_algorithm_steps: bool = True,
 ) -> tuple[DynamicReplanningStats, list[DynamicSimulationKeyframe]]:
     current_position = scenario.start
     goal = scenario.goal
@@ -81,6 +83,7 @@ def run_dynamic_simulation(
         start=current_position,
         goal=goal,
         step_record_interval=step_record_interval,
+        record_algorithm_steps=record_algorithm_steps,
     )
 
     total_execution_time_ms = initial_result.execution_time_ms
@@ -119,7 +122,10 @@ def run_dynamic_simulation(
     stuck_steps = 0
 
     event_index = 0
-    max_steps = dynamic_map.width * dynamic_map.height + max_wait_steps
+    if max_simulation_steps is not None:
+        max_steps = max_simulation_steps
+    else:
+        max_steps = dynamic_map.width * dynamic_map.height + max_wait_steps
 
     for step in range(max_steps):
         position_at_step_start = current_position
@@ -201,6 +207,7 @@ def run_dynamic_simulation(
                 frame_callback=frame_callback,
                 moving_obstacles=obstacles,
                 moving_obstacle_prediction_steps=moving_obstacle_prediction_steps,
+                record_algorithm_steps=record_algorithm_steps,
             )
             replanning_count += 1
             total_execution_time_ms += replan_time_ms
@@ -245,6 +252,7 @@ def run_dynamic_simulation(
                 frame_callback=frame_callback,
                 moving_obstacles=obstacles,
                 moving_obstacle_prediction_steps=moving_obstacle_prediction_steps,
+                record_algorithm_steps=record_algorithm_steps,
             )
             replanning_count += 1
             total_execution_time_ms += replan_time_ms
@@ -379,8 +387,17 @@ def _plan_path(
         start: Position,
         goal: Position,
         step_record_interval: int,
+        record_algorithm_steps: bool = True,
 ):
-    if isinstance(algorithm, DStarLite):
+    if record_algorithm_steps:
+        if isinstance(algorithm, DStarLite):
+            return algorithm.find_path_with_steps(
+                grid_map=dynamic_map,
+                start=start,
+                goal=goal,
+                step_record_interval=step_record_interval,
+            )
+
         return algorithm.find_path_with_steps(
             grid_map=dynamic_map,
             start=start,
@@ -388,12 +405,20 @@ def _plan_path(
             step_record_interval=step_record_interval,
         )
 
-    return algorithm.find_path_with_steps(
+    if isinstance(algorithm, DStarLite):
+        result = algorithm.find_path(
+            grid_map=dynamic_map,
+            start=start,
+            goal=goal,
+        )
+        return result, []
+
+    result = algorithm.find_path(
         grid_map=dynamic_map,
         start=start,
         goal=goal,
-        step_record_interval=step_record_interval,
     )
+    return result, []
 
 
 @contextmanager
@@ -472,6 +497,7 @@ def _handle_replanning(
         frame_callback: Callable[[DynamicSimulationKeyframe], None] | None,
         moving_obstacles: list[MovingObstacle] | None = None,
         moving_obstacle_prediction_steps: int = 0,
+        record_algorithm_steps: bool = True,
 ) -> tuple[bool, list[Position] | None, int, int, float]:
     _emit_replanning_started_keyframe(
         keyframes=keyframes,
@@ -498,6 +524,7 @@ def _handle_replanning(
             start=current_position,
             goal=goal,
             step_record_interval=step_record_interval,
+            record_algorithm_steps=record_algorithm_steps,
         )
 
     if result.found and not validate_path_walkable(dynamic_map, result.path):
@@ -556,18 +583,31 @@ def _replan_path(
         start: Position,
         goal: Position,
         step_record_interval: int,
+        record_algorithm_steps: bool = True,
 ):
-    if isinstance(algorithm, DStarLite):
-        return algorithm.replan_with_steps(
+    if record_algorithm_steps:
+        if isinstance(algorithm, DStarLite):
+            return algorithm.replan_with_steps(
+                step_record_interval=step_record_interval,
+            )
+
+        return algorithm.find_path_with_steps(
+            grid_map=dynamic_map,
+            start=start,
+            goal=goal,
             step_record_interval=step_record_interval,
         )
 
-    return algorithm.find_path_with_steps(
+    if isinstance(algorithm, DStarLite):
+        result = algorithm.replan()
+        return result, []
+
+    result = algorithm.find_path(
         grid_map=dynamic_map,
         start=start,
         goal=goal,
-        step_record_interval=step_record_interval,
     )
+    return result, []
 
 
 def _emit_keyframe(
