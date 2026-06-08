@@ -5,7 +5,10 @@ from pathfinding.src.core.dynamic_models import (
     DynamicGridMap,
     DynamicObstacleEvent,
     DynamicObstacleEventType,
+    MovingObstacle,
+    MovingObstacleCollisionPolicy,
 )
+from pathfinding.src.experiments.dynamic_simulation import run_dynamic_simulation
 from pathfinding.src.core.models import Position, Scenario
 from pathfinding.src.experiments.dynamic_replanning_experiment import (
     DynamicReplanningExperiment,
@@ -217,3 +220,133 @@ def test_agent_waits_for_temporarily_blocked_corridor() -> None:
     assert stats.final_goal_reached is True
     assert stats.waiting_steps >= 1
     assert stats.dynamic_events_applied == 2
+
+
+def test_dynamic_simulation_handles_moving_obstacle_agent_collision() -> None:
+    grid_map = build_grid_map(
+        [
+            [0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0],
+        ],
+        name="moving_obstacle_collision_map",
+    )
+
+    scenario = Scenario(
+        map_name=grid_map.name,
+        width=grid_map.width,
+        height=grid_map.height,
+        start=Position(row=0, col=1),
+        goal=Position(row=0, col=4),
+    )
+
+    dynamic_map = DynamicGridMap(base_map=grid_map)
+    moving_obstacles = [
+        MovingObstacle(
+            row=0,
+            col=2,
+            width=1,
+            height=1,
+            delta_row=0,
+            delta_col=-1,
+        )
+    ]
+
+    stats, _ = run_dynamic_simulation(
+        algorithm=AStar(),
+        dynamic_map=dynamic_map,
+        scenario=scenario,
+        events=[],
+        moving_obstacles=moving_obstacles,
+        moving_obstacle_collision_policy=MovingObstacleCollisionPolicy.PUSH_AGENT,
+    )
+
+    assert stats.initial_path_found is True
+    assert stats.collision_count >= 1
+
+
+def test_dynamic_simulation_records_agent_push_on_collision() -> None:
+    grid_map = build_grid_map(
+        [
+            [0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0],
+        ],
+        name="moving_obstacle_push_map",
+    )
+
+    scenario = Scenario(
+        map_name=grid_map.name,
+        width=grid_map.width,
+        height=grid_map.height,
+        start=Position(row=0, col=1),
+        goal=Position(row=0, col=4),
+    )
+
+    dynamic_map = DynamicGridMap(base_map=grid_map)
+    moving_obstacles = [
+        MovingObstacle(
+            row=0,
+            col=2,
+            width=1,
+            height=1,
+            delta_row=0,
+            delta_col=-1,
+        )
+    ]
+
+    stats, _ = run_dynamic_simulation(
+        algorithm=AStar(),
+        dynamic_map=dynamic_map,
+        scenario=scenario,
+        events=[],
+        moving_obstacles=moving_obstacles,
+        moving_obstacle_collision_policy=MovingObstacleCollisionPolicy.PUSH_AGENT,
+    )
+
+    assert stats.collision_count >= 1
+    assert stats.agent_push_count >= 1
+
+
+def test_dynamic_simulation_records_obstacle_blocked_when_push_impossible() -> None:
+    grid_map = build_grid_map(
+        [
+            [1, 1, 1],
+            [1, 0, 1],
+            [1, 1, 1],
+        ],
+        name="moving_obstacle_block_map",
+    )
+
+    scenario = Scenario(
+        map_name=grid_map.name,
+        width=grid_map.width,
+        height=grid_map.height,
+        start=Position(row=1, col=1),
+        goal=Position(row=1, col=1),
+    )
+
+    dynamic_map = DynamicGridMap(base_map=grid_map)
+    moving_obstacles = [
+        MovingObstacle(
+            row=2,
+            col=1,
+            width=1,
+            height=1,
+            delta_row=-1,
+            delta_col=0,
+        )
+    ]
+
+    stats, _ = run_dynamic_simulation(
+        algorithm=AStar(),
+        dynamic_map=dynamic_map,
+        scenario=scenario,
+        events=[],
+        moving_obstacles=moving_obstacles,
+        moving_obstacle_collision_policy=MovingObstacleCollisionPolicy.PUSH_AGENT,
+    )
+
+    assert stats.collision_count >= 1
+    assert stats.agent_push_count == 0
+    assert stats.obstacle_blocked_count >= 1

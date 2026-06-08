@@ -49,6 +49,9 @@ class DynamicReplanningExperiment(BaseExperiment):
             path_block_lookahead=self.config.path_block_lookahead,
             wait_when_no_path=self.config.wait_when_no_path,
             max_wait_steps=self.config.max_wait_steps,
+            moving_obstacle_collision_policy=(
+                self.config.moving_obstacle_collision_policy
+            ),
         )
         self._print_stats(stats)
         return stats

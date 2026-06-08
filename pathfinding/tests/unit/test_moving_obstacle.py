@@ -4,8 +4,10 @@ from pathfinding.src.algorithms.dstar_lite import DStarLite
 from pathfinding.src.core.dynamic_models import (
     DynamicGridMap,
     MovingObstacle,
+    MovingObstacleCollisionPolicy,
     get_occupied_positions,
     move_obstacle,
+    move_obstacle_with_agent_collision,
 )
 from pathfinding.src.core.models import Position
 from pathfinding.tests.helpers import build_grid_map
@@ -157,3 +159,106 @@ def test_dstar_lite_receives_update_cells_after_obstacle_move() -> None:
     called_keys = {(p.row, p.col) for p in called_positions}
     affected_keys = {(p.row, p.col) for p in affected_positions}
     assert called_keys == affected_keys
+
+
+def test_moving_obstacle_pushes_agent_when_collision_possible() -> None:
+    grid_map = build_grid_map(
+        [
+            [0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0],
+        ]
+    )
+    dynamic_map = DynamicGridMap(base_map=grid_map)
+    agent_position = Position(row=0, col=1)
+    obstacle = MovingObstacle(
+        row=0,
+        col=2,
+        width=1,
+        height=1,
+        delta_row=0,
+        delta_col=-1,
+    )
+
+    dynamic_map.block_cell(Position(row=obstacle.row, col=obstacle.col))
+
+    result = move_obstacle_with_agent_collision(
+        obstacle=obstacle,
+        dynamic_map=dynamic_map,
+        agent_position=agent_position,
+        policy=MovingObstacleCollisionPolicy.PUSH_AGENT,
+    )
+
+    assert result.collision_detected is True
+    assert result.agent_pushed is True
+    assert result.new_agent_position is not None
+    assert result.new_agent_position != agent_position
+
+
+def test_moving_obstacle_does_not_push_agent_into_wall() -> None:
+    grid_map = build_grid_map(
+        [
+            [0, 0, 0, 0, 0],
+            [0, 1, 0, 0, 0],
+            [0, 0, 0, 0, 0],
+        ]
+    )
+    dynamic_map = DynamicGridMap(base_map=grid_map)
+    agent_position = Position(row=1, col=2)
+    wall_position = Position(row=1, col=1)
+    obstacle = MovingObstacle(
+        row=1,
+        col=3,
+        width=1,
+        height=1,
+        delta_row=0,
+        delta_col=-1,
+    )
+
+    dynamic_map.block_cell(Position(row=obstacle.row, col=obstacle.col))
+
+    result = move_obstacle_with_agent_collision(
+        obstacle=obstacle,
+        dynamic_map=dynamic_map,
+        agent_position=agent_position,
+        policy=MovingObstacleCollisionPolicy.PUSH_AGENT,
+    )
+
+    assert result.agent_pushed is True
+    assert result.new_agent_position is not None
+    assert result.new_agent_position != wall_position
+
+
+def test_moving_obstacle_blocks_when_agent_cannot_be_pushed() -> None:
+    grid_map = build_grid_map(
+        [
+            [1, 1, 1],
+            [1, 0, 1],
+            [1, 1, 1],
+        ]
+    )
+    dynamic_map = DynamicGridMap(base_map=grid_map)
+    agent_position = Position(row=1, col=1)
+    obstacle = MovingObstacle(
+        row=2,
+        col=1,
+        width=1,
+        height=1,
+        delta_row=-1,
+        delta_col=0,
+    )
+
+    dynamic_map.block_cell(Position(row=obstacle.row, col=obstacle.col))
+
+    result = move_obstacle_with_agent_collision(
+        obstacle=obstacle,
+        dynamic_map=dynamic_map,
+        agent_position=agent_position,
+        policy=MovingObstacleCollisionPolicy.PUSH_AGENT,
+    )
+
+    assert result.collision_detected is True
+    assert result.agent_pushed is False
+    assert result.obstacle_blocked is True
+    assert obstacle.row == 2
+    assert obstacle.col == 1

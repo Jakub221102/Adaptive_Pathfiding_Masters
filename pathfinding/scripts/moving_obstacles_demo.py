@@ -16,7 +16,7 @@ def main() -> None:
         scen_path=Path("../../Data/bg512-scen/AR0204SR.map.scen"),
         scenario_index=19,
         min_optimal_length=100,
-        algorithm=AlgorithmName.DSTAR_LITE,
+        algorithm=AlgorithmName.ASTAR,
         fps=120,
         step_delay_ms=8,
         steps_per_frame=8,
@@ -31,11 +31,11 @@ def main() -> None:
 
     moving_obstacles = [
         MovingObstacle(
-            row=130,
+            row=30,
             col=300,
             width=10,
             height=10,
-            delta_row=-1,
+            delta_row=-5,
             delta_col=0,
         )
     ]

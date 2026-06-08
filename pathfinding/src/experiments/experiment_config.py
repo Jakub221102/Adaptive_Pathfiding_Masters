@@ -3,6 +3,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+from pathfinding.src.core.dynamic_models import MovingObstacleCollisionPolicy
 from pathfinding.src.visualization.pygame_models import ViewerMode
 
 
@@ -36,6 +37,9 @@ class ExperimentConfig(BaseModel):
     path_block_lookahead: int = Field(default=8, gt=0)
     wait_when_no_path: bool = True
     max_wait_steps: int = Field(default=30, ge=0)
+    moving_obstacle_collision_policy: MovingObstacleCollisionPolicy = (
+        MovingObstacleCollisionPolicy.PUSH_AGENT
+    )
 
     show_cluster_overlay: bool = False
     cluster_size: int = Field(default=32, gt=0)

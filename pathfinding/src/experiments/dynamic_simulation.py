@@ -10,9 +10,10 @@ from pathfinding.src.core.dynamic_models import (
     DynamicObstacleEvent,
     DynamicReplanningStats,
     MovingObstacle,
+    MovingObstacleCollisionPolicy,
     apply_dynamic_event,
     is_path_blocked_with_lookahead,
-    move_obstacle,
+    move_obstacle_with_agent_collision,
 )
 from pathfinding.src.core.models import Position, Scenario
 from pathfinding.src.core.trace import RawAlgorithmStep
@@ -53,6 +54,9 @@ def run_dynamic_simulation(
         path_block_lookahead: int = 8,
         wait_when_no_path: bool = True,
         max_wait_steps: int = 30,
+        moving_obstacle_collision_policy: MovingObstacleCollisionPolicy = (
+            MovingObstacleCollisionPolicy.PUSH_AGENT
+        ),
 ) -> tuple[DynamicReplanningStats, list[DynamicSimulationKeyframe]]:
     current_position = scenario.start
     goal = scenario.goal
@@ -104,12 +108,21 @@ def run_dynamic_simulation(
     final_goal_reached = False
     waiting_steps = 0
     total_waiting_steps = 0
+    collision_count = 0
+    agent_push_count = 0
+    obstacle_blocked_count = 0
 
     event_index = 0
     max_steps = dynamic_map.width * dynamic_map.height + max_wait_steps
 
     for step in range(max_steps):
-        _move_moving_obstacles(
+        (
+            current_position,
+            step_collision_count,
+            step_agent_push_count,
+            step_obstacle_blocked_count,
+            agent_position_changed,
+        ) = _move_moving_obstacles(
             algorithm=algorithm,
             dynamic_map=dynamic_map,
             moving_obstacles=obstacles,
@@ -117,10 +130,17 @@ def run_dynamic_simulation(
             frame_callback=frame_callback,
             keyframes=keyframes,
             agent_position=current_position,
-            planned_path=current_path,
+            planned_path=current_path[current_path_index:],
             travelled_path=travelled_path,
             step=step,
+            collision_policy=moving_obstacle_collision_policy,
         )
+        collision_count += step_collision_count
+        agent_push_count += step_agent_push_count
+        obstacle_blocked_count += step_obstacle_blocked_count
+
+        if agent_position_changed:
+            current_path_index = 0
 
         applied_events, event_index = _apply_events(
             algorithm=algorithm,
@@ -132,7 +152,7 @@ def run_dynamic_simulation(
             frame_callback=frame_callback,
             keyframes=keyframes,
             agent_position=current_position,
-            planned_path=current_path,
+            planned_path=current_path[current_path_index:],
             travelled_path=travelled_path,
         )
         dynamic_events_applied += applied_events
@@ -141,7 +161,9 @@ def run_dynamic_simulation(
             final_goal_reached = True
             break
 
-        if is_path_blocked_with_lookahead(
+        force_replan = agent_position_changed
+
+        if force_replan or is_path_blocked_with_lookahead(
                 dynamic_map,
                 current_path,
                 current_path_index,
@@ -177,7 +199,7 @@ def run_dynamic_simulation(
                 break
 
             if replanned_path is None:
-                total_waiting_steps = waiting_steps
+                total_waiting_steps += 1
                 continue
 
             current_path = replanned_path
@@ -219,7 +241,7 @@ def run_dynamic_simulation(
                 break
 
             if replanned_path is None:
-                total_waiting_steps = waiting_steps
+                total_waiting_steps += 1
                 continue
 
             current_path = replanned_path
@@ -264,6 +286,9 @@ def run_dynamic_simulation(
         travelled_steps=max(len(travelled_path) - 1, 0),
         dynamic_events_applied=dynamic_events_applied,
         waiting_steps=total_waiting_steps,
+        agent_push_count=agent_push_count,
+        obstacle_blocked_count=obstacle_blocked_count,
+        collision_count=collision_count,
     )
     return stats, keyframes
 
@@ -374,7 +399,7 @@ def _handle_replanning(
         record_keyframes=record_keyframes,
         frame_callback=frame_callback,
         agent_position=current_position,
-        planned_path=current_path,
+        planned_path=current_path[current_path_index:],
         travelled_path=travelled_path,
         dynamic_map=dynamic_map,
         replanning_count=replanning_count + 1,
@@ -411,7 +436,7 @@ def _handle_replanning(
             record_keyframes=record_keyframes,
             frame_callback=frame_callback,
             agent_position=current_position,
-            planned_path=current_path,
+            planned_path=current_path[current_path_index:],
             travelled_path=travelled_path,
             dynamic_map=dynamic_map,
             waiting_steps=waiting_steps + 1,
@@ -471,38 +496,105 @@ def _move_moving_obstacles(
         planned_path: list[Position],
         travelled_path: list[Position],
         step: int,
-) -> None:
+        collision_policy: MovingObstacleCollisionPolicy,
+) -> tuple[Position, int, int, int, bool]:
+    current_agent_position = agent_position
+    collision_count = 0
+    agent_push_count = 0
+    obstacle_blocked_count = 0
+    agent_position_changed = False
+
     for obstacle in moving_obstacles:
-        affected_positions = move_obstacle(
+        move_result = move_obstacle_with_agent_collision(
             obstacle=obstacle,
             dynamic_map=dynamic_map,
+            agent_position=current_agent_position,
+            policy=collision_policy,
         )
 
+        if move_result.collision_detected:
+            collision_count += 1
+
+        if move_result.agent_pushed:
+            agent_push_count += 1
+            agent_position_changed = True
+            if move_result.new_agent_position is not None:
+                current_agent_position = move_result.new_agent_position
+                travelled_path.append(current_agent_position)
+
+                if isinstance(algorithm, DStarLite):
+                    algorithm.move_agent(current_agent_position)
+
+        if move_result.obstacle_blocked:
+            obstacle_blocked_count += 1
+
         if isinstance(algorithm, DStarLite):
-            algorithm.update_cells(affected_positions)
+            algorithm.update_cells(move_result.affected_positions)
 
         size_label = (
             f"{obstacle.width}x{obstacle.height}"
             if obstacle.width > 1 or obstacle.height > 1
             else "1x1"
         )
-        _emit_keyframe(
-            keyframes=keyframes,
-            record_keyframes=record_keyframes,
-            frame_callback=frame_callback,
-            keyframe=DynamicSimulationKeyframe(
-                frame_type="obstacle",
-                agent_position=agent_position,
-                planned_path=planned_path,
-                travelled_path=list(travelled_path),
-                dynamic_blocked=set(dynamic_map.dynamic_blocked),
-                new_obstacle_positions=affected_positions,
-                status_text=(
-                    f"Moving obstacle ({size_label}) "
-                    f"at ({obstacle.row}, {obstacle.col}) step {step}"
+
+        if move_result.agent_pushed:
+            _emit_keyframe(
+                keyframes=keyframes,
+                record_keyframes=record_keyframes,
+                frame_callback=frame_callback,
+                keyframe=DynamicSimulationKeyframe(
+                    frame_type="path_update",
+                    agent_position=current_agent_position,
+                    planned_path=planned_path,
+                    travelled_path=list(travelled_path),
+                    dynamic_blocked=set(dynamic_map.dynamic_blocked),
+                    new_obstacle_positions=move_result.affected_positions,
+                    status_text="Moving obstacle pushed agent",
                 ),
-            ),
-        )
+            )
+        elif move_result.obstacle_blocked:
+            _emit_keyframe(
+                keyframes=keyframes,
+                record_keyframes=record_keyframes,
+                frame_callback=frame_callback,
+                keyframe=DynamicSimulationKeyframe(
+                    frame_type="path_update",
+                    agent_position=current_agent_position,
+                    planned_path=planned_path,
+                    travelled_path=list(travelled_path),
+                    dynamic_blocked=set(dynamic_map.dynamic_blocked),
+                    new_obstacle_positions=move_result.affected_positions,
+                    status_text=(
+                        "Moving obstacle blocked to avoid crushing agent"
+                    ),
+                ),
+            )
+        else:
+            _emit_keyframe(
+                keyframes=keyframes,
+                record_keyframes=record_keyframes,
+                frame_callback=frame_callback,
+                keyframe=DynamicSimulationKeyframe(
+                    frame_type="obstacle",
+                    agent_position=current_agent_position,
+                    planned_path=planned_path,
+                    travelled_path=list(travelled_path),
+                    dynamic_blocked=set(dynamic_map.dynamic_blocked),
+                    new_obstacle_positions=move_result.affected_positions,
+                    status_text=(
+                        f"Moving obstacle ({size_label}) "
+                        f"at ({obstacle.row}, {obstacle.col}) step {step}"
+                    ),
+                ),
+            )
+
+    return (
+        current_agent_position,
+        collision_count,
+        agent_push_count,
+        obstacle_blocked_count,
+        agent_position_changed,
+    )
 
 
 def _apply_events(
@@ -679,4 +771,7 @@ def _build_failed_stats(
         travelled_steps=0,
         dynamic_events_applied=0,
         waiting_steps=0,
+        agent_push_count=0,
+        obstacle_blocked_count=0,
+        collision_count=0,
     )
