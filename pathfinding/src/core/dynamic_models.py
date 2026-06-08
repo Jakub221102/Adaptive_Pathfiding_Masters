@@ -538,8 +538,8 @@ def _block_obstacle_with_bounce(
         delta_row: int,
         delta_col: int,
 ) -> list[Position]:
-    obstacle.delta_row = delta_row
-    obstacle.delta_col = delta_col
+    obstacle.delta_row = -delta_row
+    obstacle.delta_col = -delta_col
     return list(old_positions)
 
 

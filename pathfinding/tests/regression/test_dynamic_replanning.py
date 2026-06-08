@@ -498,3 +498,51 @@ def test_dstar_lite_dynamic_replanning_with_prediction_reaches_goal() -> None:
 
     assert stats.initial_path_found is True
     assert stats.final_goal_reached is True
+
+
+def test_dynamic_simulation_does_not_deadlock_in_narrow_corridor() -> None:
+    grid_map = build_grid_map(
+        [
+            [1, 1, 1, 1, 1, 1],
+            [1, 0, 0, 0, 0, 1],
+            [1, 1, 1, 1, 1, 1],
+        ],
+        name="narrow_corridor_deadlock_map",
+    )
+
+    scenario = Scenario(
+        map_name=grid_map.name,
+        width=grid_map.width,
+        height=grid_map.height,
+        start=Position(row=1, col=1),
+        goal=Position(row=1, col=3),
+    )
+
+    dynamic_map = DynamicGridMap(base_map=grid_map)
+    moving_obstacles = [
+        MovingObstacle(
+            row=1,
+            col=4,
+            width=1,
+            height=1,
+            delta_row=0,
+            delta_col=-1,
+        )
+    ]
+
+    stats, _ = run_dynamic_simulation(
+        algorithm=AStar(),
+        dynamic_map=dynamic_map,
+        scenario=scenario,
+        events=[],
+        moving_obstacles=moving_obstacles,
+        moving_obstacle_collision_policy=MovingObstacleCollisionPolicy.PUSH_AGENT,
+        moving_obstacle_prediction_steps=0,
+        path_block_lookahead=4,
+        max_stuck_steps=25,
+    )
+
+    assert stats.initial_path_found is True
+    assert stats.travelled_steps > 0
+    assert stats.obstacle_blocked_count > 0
+    assert stats.waiting_steps <= 30

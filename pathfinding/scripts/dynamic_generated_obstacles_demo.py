@@ -22,7 +22,7 @@ def main() -> None:
         scen_path=scen_path,
         scenario_index=1,
         min_optimal_length=400,
-        algorithm=AlgorithmName.ASTAR,
+        algorithm=AlgorithmName.DSTAR_LITE,
         fps=120,
         step_delay_ms=1,
         steps_per_frame=200,
@@ -35,7 +35,7 @@ def main() -> None:
         path_block_lookahead=40,
         wait_when_no_path=True,
         max_wait_steps=30,
-        moving_obstacle_prediction_steps=10,
+        moving_obstacle_prediction_steps=5,
     )
 
     scenario_loader = DynamicReplanningVisualizationExperiment(config=config)

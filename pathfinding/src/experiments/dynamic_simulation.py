@@ -57,6 +57,7 @@ def run_dynamic_simulation(
         path_block_lookahead: int = 8,
         wait_when_no_path: bool = True,
         max_wait_steps: int = 30,
+        max_stuck_steps: int = 50,
         moving_obstacle_collision_policy: MovingObstacleCollisionPolicy = (
             MovingObstacleCollisionPolicy.PUSH_AGENT
         ),
@@ -115,11 +116,14 @@ def run_dynamic_simulation(
     collision_count = 0
     agent_push_count = 0
     obstacle_blocked_count = 0
+    stuck_steps = 0
 
     event_index = 0
     max_steps = dynamic_map.width * dynamic_map.height + max_wait_steps
 
     for step in range(max_steps):
+        position_at_step_start = current_position
+
         (
             current_position,
             step_collision_count,
@@ -283,6 +287,13 @@ def run_dynamic_simulation(
         if current_position == goal:
             final_goal_reached = True
             break
+
+        if current_position != position_at_step_start:
+            stuck_steps = 0
+        else:
+            stuck_steps += 1
+            if stuck_steps > max_stuck_steps:
+                break
 
     stats = DynamicReplanningStats(
         algorithm_name=algorithm.name,

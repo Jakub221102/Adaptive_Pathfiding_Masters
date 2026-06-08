@@ -339,3 +339,106 @@ def test_moving_obstacle_does_not_create_tunnel_through_wall() -> None:
 
     for wall_position in wall_positions:
         assert dynamic_map.is_walkable(wall_position) is False
+
+
+def test_obstacle_reverses_direction_when_push_impossible() -> None:
+    grid_map = build_grid_map(
+        [
+            [1, 1, 1, 1, 1],
+            [1, 0, 0, 0, 1],
+            [1, 1, 1, 1, 1],
+        ]
+    )
+    dynamic_map = DynamicGridMap(base_map=grid_map)
+    agent_position = Position(row=1, col=1)
+    obstacle = MovingObstacle(
+        row=1,
+        col=2,
+        width=1,
+        height=1,
+        delta_row=0,
+        delta_col=-1,
+    )
+
+    dynamic_map.block_cell(Position(row=obstacle.row, col=obstacle.col))
+
+    result = move_obstacle_with_agent_collision(
+        obstacle=obstacle,
+        dynamic_map=dynamic_map,
+        agent_position=agent_position,
+        policy=MovingObstacleCollisionPolicy.PUSH_AGENT,
+    )
+
+    assert result.obstacle_blocked is True
+    assert obstacle.delta_col == 1
+    assert obstacle.col == 2
+
+
+def test_obstacle_moves_away_after_direction_reversal() -> None:
+    grid_map = build_grid_map(
+        [
+            [1, 1, 1, 1, 1],
+            [1, 0, 0, 0, 1],
+            [1, 1, 1, 1, 1],
+        ]
+    )
+    dynamic_map = DynamicGridMap(base_map=grid_map)
+    agent_position = Position(row=1, col=1)
+    obstacle = MovingObstacle(
+        row=1,
+        col=2,
+        width=1,
+        height=1,
+        delta_row=0,
+        delta_col=-1,
+    )
+
+    dynamic_map.block_cell(Position(row=obstacle.row, col=obstacle.col))
+
+    move_obstacle_with_agent_collision(
+        obstacle=obstacle,
+        dynamic_map=dynamic_map,
+        agent_position=agent_position,
+        policy=MovingObstacleCollisionPolicy.PUSH_AGENT,
+    )
+
+    move_obstacle_with_agent_collision(
+        obstacle=obstacle,
+        dynamic_map=dynamic_map,
+        agent_position=agent_position,
+        policy=MovingObstacleCollisionPolicy.PUSH_AGENT,
+    )
+
+    assert obstacle.col > agent_position.col
+
+
+def test_obstacle_reverses_direction_with_block_obstacle_policy() -> None:
+    grid_map = build_grid_map(
+        [
+            [1, 1, 1, 1, 1],
+            [1, 0, 0, 0, 1],
+            [1, 1, 1, 1, 1],
+        ]
+    )
+    dynamic_map = DynamicGridMap(base_map=grid_map)
+    agent_position = Position(row=1, col=1)
+    obstacle = MovingObstacle(
+        row=1,
+        col=2,
+        width=1,
+        height=1,
+        delta_row=0,
+        delta_col=-1,
+    )
+
+    dynamic_map.block_cell(Position(row=obstacle.row, col=obstacle.col))
+
+    result = move_obstacle_with_agent_collision(
+        obstacle=obstacle,
+        dynamic_map=dynamic_map,
+        agent_position=agent_position,
+        policy=MovingObstacleCollisionPolicy.BLOCK_OBSTACLE,
+    )
+
+    assert result.obstacle_blocked is True
+    assert obstacle.delta_col == 1
