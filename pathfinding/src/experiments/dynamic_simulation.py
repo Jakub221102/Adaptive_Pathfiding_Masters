@@ -1,4 +1,5 @@
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -14,8 +15,10 @@ from pathfinding.src.core.dynamic_models import (
     apply_dynamic_event,
     is_path_blocked_with_lookahead,
     move_obstacle_with_agent_collision,
+    predict_moving_obstacle_positions,
+    validate_path_walkable,
 )
-from pathfinding.src.core.models import Position, Scenario
+from pathfinding.src.core.models import PathfindingResult, Position, Scenario
 from pathfinding.src.core.trace import RawAlgorithmStep
 
 
@@ -57,6 +60,7 @@ def run_dynamic_simulation(
         moving_obstacle_collision_policy: MovingObstacleCollisionPolicy = (
             MovingObstacleCollisionPolicy.PUSH_AGENT
         ),
+        moving_obstacle_prediction_steps: int = 0,
 ) -> tuple[DynamicReplanningStats, list[DynamicSimulationKeyframe]]:
     current_position = scenario.start
     goal = scenario.goal
@@ -191,6 +195,8 @@ def run_dynamic_simulation(
                 keyframes=keyframes,
                 record_keyframes=record_keyframes,
                 frame_callback=frame_callback,
+                moving_obstacles=obstacles,
+                moving_obstacle_prediction_steps=moving_obstacle_prediction_steps,
             )
             replanning_count += 1
             total_execution_time_ms += replan_time_ms
@@ -233,6 +239,8 @@ def run_dynamic_simulation(
                 keyframes=keyframes,
                 record_keyframes=record_keyframes,
                 frame_callback=frame_callback,
+                moving_obstacles=obstacles,
+                moving_obstacle_prediction_steps=moving_obstacle_prediction_steps,
             )
             replanning_count += 1
             total_execution_time_ms += replan_time_ms
@@ -377,6 +385,64 @@ def _plan_path(
     )
 
 
+@contextmanager
+def with_predicted_obstacle_blocks(
+        dynamic_map: DynamicGridMap,
+        moving_obstacles: list[MovingObstacle],
+        prediction_steps: int,
+        algorithm,
+        current_position: Position,
+        goal: Position,
+) -> Iterator[None]:
+    if prediction_steps <= 0 or not moving_obstacles:
+        yield
+        return
+
+    predicted_positions = predict_moving_obstacle_positions(
+        obstacles=moving_obstacles,
+        dynamic_map=dynamic_map,
+        steps=prediction_steps,
+    )
+
+    reserved_positions = {
+        (current_position.row, current_position.col),
+        (goal.row, goal.col),
+    }
+    added_positions: list[Position] = []
+
+    for row, col in predicted_positions:
+        if (row, col) in reserved_positions:
+            continue
+
+        if (row, col) in dynamic_map.dynamic_blocked:
+            continue
+
+        position = Position(row=row, col=col)
+
+        if not dynamic_map.in_bounds(position):
+            continue
+
+        if not dynamic_map.base_map.is_walkable(position):
+            continue
+
+        added_positions.append(position)
+
+    for position in added_positions:
+        dynamic_map.dynamic_blocked.add((position.row, position.col))
+
+    if added_positions and isinstance(algorithm, DStarLite):
+        algorithm.update_cells(added_positions)
+
+    try:
+        yield
+    finally:
+        for position in added_positions:
+            dynamic_map.dynamic_blocked.discard((position.row, position.col))
+
+        if added_positions and isinstance(algorithm, DStarLite):
+            algorithm.update_cells(added_positions)
+
+
 def _handle_replanning(
         algorithm,
         dynamic_map: DynamicGridMap,
@@ -393,6 +459,8 @@ def _handle_replanning(
         keyframes: list[DynamicSimulationKeyframe],
         record_keyframes: bool,
         frame_callback: Callable[[DynamicSimulationKeyframe], None] | None,
+        moving_obstacles: list[MovingObstacle] | None = None,
+        moving_obstacle_prediction_steps: int = 0,
 ) -> tuple[bool, list[Position] | None, int, int, float]:
     _emit_replanning_started_keyframe(
         keyframes=keyframes,
@@ -405,13 +473,32 @@ def _handle_replanning(
         replanning_count=replanning_count + 1,
     )
 
-    result, search_steps = _replan_path(
-        algorithm=algorithm,
-        dynamic_map=dynamic_map,
-        start=current_position,
-        goal=goal,
-        step_record_interval=step_record_interval,
-    )
+    with with_predicted_obstacle_blocks(
+            dynamic_map=dynamic_map,
+            moving_obstacles=moving_obstacles or [],
+            prediction_steps=moving_obstacle_prediction_steps,
+            algorithm=algorithm,
+            current_position=current_position,
+            goal=goal,
+    ):
+        result, search_steps = _replan_path(
+            algorithm=algorithm,
+            dynamic_map=dynamic_map,
+            start=current_position,
+            goal=goal,
+            step_record_interval=step_record_interval,
+        )
+
+    if result.found and not validate_path_walkable(dynamic_map, result.path):
+        result = PathfindingResult(
+            algorithm_name=result.algorithm_name,
+            found=False,
+            path=[],
+            path_length=0,
+            path_cost=0.0,
+            visited_nodes=result.visited_nodes,
+            execution_time_ms=result.execution_time_ms,
+        )
 
     if result.found:
         _emit_keyframe(

@@ -50,6 +50,31 @@ class DynamicGridMap(BaseModel):
         self.dynamic_blocked.discard(key)
         self.dynamic_unblocked.add(key)
 
+    def clear_dynamic_block(self, position: Position) -> None:
+        key = (position.row, position.col)
+        self.dynamic_blocked.discard(key)
+
+    def clear_dynamic_block_rectangle(
+            self,
+            position: Position,
+            width: int = 1,
+            height: int = 1,
+    ) -> list[Position]:
+        affected_positions: list[Position] = []
+
+        for cell_position in iter_rectangle_positions(
+                position=position,
+                width=width,
+                height=height,
+        ):
+            if not self.in_bounds(cell_position):
+                continue
+
+            self.clear_dynamic_block(cell_position)
+            affected_positions.append(cell_position)
+
+        return affected_positions
+
     def reset_dynamic_changes(self) -> None:
         self.dynamic_blocked.clear()
         self.dynamic_unblocked.clear()
@@ -193,6 +218,16 @@ def is_path_blocked_with_lookahead(
     return False
 
 
+def validate_path_walkable(
+        grid_map: DynamicGridMap,
+        path: list[Position],
+) -> bool:
+    return all(
+        grid_map.in_bounds(position) and grid_map.is_walkable(position)
+        for position in path
+    )
+
+
 class MovingObstacle(BaseModel):
     row: int
     col: int
@@ -210,6 +245,61 @@ def get_occupied_positions(obstacle: MovingObstacle) -> list[Position]:
         width=obstacle.width,
         height=obstacle.height,
     )
+
+
+def predict_moving_obstacle_positions(
+        obstacles: list[MovingObstacle],
+        dynamic_map: DynamicGridMap,
+        steps: int,
+) -> set[tuple[int, int]]:
+    if steps <= 0:
+        return set()
+
+    simulated = [
+        (
+            obstacle.row,
+            obstacle.col,
+            obstacle.width,
+            obstacle.height,
+            obstacle.delta_row,
+            obstacle.delta_col,
+        )
+        for obstacle in obstacles
+    ]
+    predicted: set[tuple[int, int]] = set()
+
+    for _ in range(steps):
+        next_simulated: list[tuple[int, int, int, int, int, int]] = []
+
+        for row, col, width, height, delta_row, delta_col in simulated:
+            new_row = row + delta_row
+            new_col = col + delta_col
+            new_delta_row = delta_row
+            new_delta_col = delta_col
+
+            if not _obstacle_can_occupy(
+                    dynamic_map=dynamic_map,
+                    row=new_row,
+                    col=new_col,
+                    width=width,
+                    height=height,
+            ):
+                new_delta_row = -delta_row
+                new_delta_col = -delta_col
+                new_row = row + new_delta_row
+                new_col = col + new_delta_col
+
+            for cell_row in range(new_row, new_row + height):
+                for cell_col in range(new_col, new_col + width):
+                    predicted.add((cell_row, cell_col))
+
+            next_simulated.append(
+                (new_row, new_col, width, height, new_delta_row, new_delta_col)
+            )
+
+        simulated = next_simulated
+
+    return predicted
 
 
 def _obstacle_fits(
@@ -231,6 +321,31 @@ def _obstacle_fits(
     return True
 
 
+def _obstacle_can_occupy(
+        dynamic_map: DynamicGridMap,
+        row: int,
+        col: int,
+        width: int,
+        height: int,
+) -> bool:
+    if row < 0 or col < 0:
+        return False
+
+    if row + height > dynamic_map.height:
+        return False
+
+    if col + width > dynamic_map.width:
+        return False
+
+    for cell_row in range(row, row + height):
+        for cell_col in range(col, col + width):
+            position = Position(row=cell_row, col=cell_col)
+            if not dynamic_map.base_map.is_walkable(position):
+                return False
+
+    return True
+
+
 def move_obstacle(
         obstacle: MovingObstacle,
         dynamic_map: DynamicGridMap,
@@ -239,12 +354,12 @@ def move_obstacle(
 
     for position in old_positions:
         if dynamic_map.in_bounds(position):
-            dynamic_map.unblock_cell(position)
+            dynamic_map.clear_dynamic_block(position)
 
     new_row = obstacle.row + obstacle.delta_row
     new_col = obstacle.col + obstacle.delta_col
 
-    if not _obstacle_fits(
+    if not _obstacle_can_occupy(
             dynamic_map=dynamic_map,
             row=new_row,
             col=new_col,
@@ -361,7 +476,7 @@ def _compute_candidate_position(
     new_row = obstacle.row + delta_row
     new_col = obstacle.col + delta_col
 
-    if not _obstacle_fits(
+    if not _obstacle_can_occupy(
             dynamic_map=dynamic_map,
             row=new_row,
             col=new_col,
@@ -401,7 +516,7 @@ def _apply_obstacle_move(
 ) -> list[Position]:
     for position in old_positions:
         if dynamic_map.in_bounds(position):
-            dynamic_map.unblock_cell(position)
+            dynamic_map.clear_dynamic_block(position)
 
     obstacle.row = new_row
     obstacle.col = new_col

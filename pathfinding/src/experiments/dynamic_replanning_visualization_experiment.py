@@ -76,6 +76,9 @@ class DynamicReplanningVisualizationExperiment(BaseExperiment):
             moving_obstacle_collision_policy=(
                 self.config.moving_obstacle_collision_policy
             ),
+            moving_obstacle_prediction_steps=(
+                self.config.moving_obstacle_prediction_steps
+            ),
         )
 
         presenter.finalize()

@@ -52,6 +52,9 @@ class DynamicReplanningExperiment(BaseExperiment):
             moving_obstacle_collision_policy=(
                 self.config.moving_obstacle_collision_policy
             ),
+            moving_obstacle_prediction_steps=(
+                self.config.moving_obstacle_prediction_steps
+            ),
         )
         self._print_stats(stats)
         return stats

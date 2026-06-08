@@ -37,6 +37,7 @@ class ExperimentConfig(BaseModel):
     path_block_lookahead: int = Field(default=8, gt=0)
     wait_when_no_path: bool = True
     max_wait_steps: int = Field(default=30, ge=0)
+    moving_obstacle_prediction_steps: int = Field(default=0, ge=0)
     moving_obstacle_collision_policy: MovingObstacleCollisionPolicy = (
         MovingObstacleCollisionPolicy.PUSH_AGENT
     )

@@ -262,3 +262,80 @@ def test_moving_obstacle_blocks_when_agent_cannot_be_pushed() -> None:
     assert result.obstacle_blocked is True
     assert obstacle.row == 2
     assert obstacle.col == 1
+
+
+def test_moving_obstacle_does_not_enter_static_wall() -> None:
+    grid_map = build_grid_map([[0, 0, 1]])
+    dynamic_map = DynamicGridMap(base_map=grid_map)
+    obstacle = MovingObstacle(
+        row=0,
+        col=1,
+        width=1,
+        height=1,
+        delta_row=0,
+        delta_col=1,
+    )
+
+    dynamic_map.block_cell(Position(row=0, col=1))
+
+    move_obstacle(obstacle=obstacle, dynamic_map=dynamic_map)
+
+    assert obstacle.col != 2
+    assert dynamic_map.is_walkable(Position(row=0, col=2)) is False
+
+
+def test_moving_obstacle_clears_block_without_dynamic_unblocked() -> None:
+    grid_map = build_grid_map(
+        [
+            [0, 0, 0],
+            [0, 0, 0],
+        ]
+    )
+    dynamic_map = DynamicGridMap(base_map=grid_map)
+    obstacle = MovingObstacle(
+        row=0,
+        col=1,
+        width=1,
+        height=1,
+        delta_row=0,
+        delta_col=1,
+    )
+
+    dynamic_map.block_cell(Position(row=0, col=1))
+
+    move_obstacle(obstacle=obstacle, dynamic_map=dynamic_map)
+
+    assert (0, 1) not in dynamic_map.dynamic_unblocked
+    assert dynamic_map.is_walkable(Position(row=0, col=1)) is True
+
+
+def test_moving_obstacle_does_not_create_tunnel_through_wall() -> None:
+    grid_map = build_grid_map(
+        [
+            [0, 0, 1, 0, 0],
+            [0, 0, 1, 0, 0],
+            [0, 0, 1, 0, 0],
+        ]
+    )
+    dynamic_map = DynamicGridMap(base_map=grid_map)
+    wall_positions = [
+        Position(row=0, col=2),
+        Position(row=1, col=2),
+        Position(row=2, col=2),
+    ]
+    obstacle = MovingObstacle(
+        row=1,
+        col=1,
+        width=1,
+        height=1,
+        delta_row=0,
+        delta_col=1,
+    )
+
+    dynamic_map.block_cell(Position(row=1, col=1))
+
+    for _ in range(5):
+        move_obstacle(obstacle=obstacle, dynamic_map=dynamic_map)
+
+    for wall_position in wall_positions:
+        assert dynamic_map.is_walkable(wall_position) is False
