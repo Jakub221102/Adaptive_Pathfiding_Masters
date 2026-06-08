@@ -3,6 +3,7 @@ from pathfinding.src.core.dynamic_models import (
     DynamicObstacleEvent,
     DynamicObstacleEventType,
     apply_dynamic_event,
+    is_path_blocked_with_lookahead,
 )
 from pathfinding.src.core.models import Position
 from pathfinding.tests.helpers import build_grid_map
@@ -126,3 +127,33 @@ def test_apply_dynamic_event_supports_rectangle_block() -> None:
     assert len(affected_positions) == 2
     assert dynamic_map.is_walkable(Position(row=0, col=1)) is False
     assert dynamic_map.is_walkable(Position(row=0, col=2)) is False
+
+
+def test_lookahead_ignores_distant_blocked_cell() -> None:
+    grid_map = build_grid_map([[0] * 25])
+    dynamic_map = DynamicGridMap(base_map=grid_map)
+    path = [Position(row=0, col=col) for col in range(25)]
+
+    dynamic_map.block_cell(Position(row=0, col=20))
+
+    assert is_path_blocked_with_lookahead(
+        grid_map=dynamic_map,
+        path=path,
+        current_index=0,
+        lookahead_steps=5,
+    ) is False
+
+
+def test_lookahead_detects_blocked_cell_within_range() -> None:
+    grid_map = build_grid_map([[0] * 10])
+    dynamic_map = DynamicGridMap(base_map=grid_map)
+    path = [Position(row=0, col=col) for col in range(10)]
+
+    dynamic_map.block_cell(Position(row=0, col=3))
+
+    assert is_path_blocked_with_lookahead(
+        grid_map=dynamic_map,
+        path=path,
+        current_index=0,
+        lookahead_steps=5,
+    ) is True

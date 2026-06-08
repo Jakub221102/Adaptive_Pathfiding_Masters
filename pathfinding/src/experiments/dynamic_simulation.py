@@ -9,8 +9,10 @@ from pathfinding.src.core.dynamic_models import (
     DynamicGridMap,
     DynamicObstacleEvent,
     DynamicReplanningStats,
+    MovingObstacle,
     apply_dynamic_event,
-    is_path_blocked,
+    is_path_blocked_with_lookahead,
+    move_obstacle,
 )
 from pathfinding.src.core.models import Position, Scenario
 from pathfinding.src.core.trace import RawAlgorithmStep
@@ -44,13 +46,25 @@ def run_dynamic_simulation(
         scenario: Scenario,
         events: list[DynamicObstacleEvent],
         *,
+        moving_obstacles: list[MovingObstacle] | None = None,
         record_keyframes: bool = False,
         frame_callback: Callable[[DynamicSimulationKeyframe], None] | None = None,
         step_record_interval: int = 10,
+        path_block_lookahead: int = 8,
+        wait_when_no_path: bool = True,
+        max_wait_steps: int = 30,
 ) -> tuple[DynamicReplanningStats, list[DynamicSimulationKeyframe]]:
     current_position = scenario.start
     goal = scenario.goal
     keyframes: list[DynamicSimulationKeyframe] = []
+    obstacles = list(moving_obstacles or [])
+
+    for obstacle in obstacles:
+        dynamic_map.block_rectangle(
+            position=Position(row=obstacle.row, col=obstacle.col),
+            width=obstacle.width,
+            height=obstacle.height,
+        )
 
     initial_result, initial_steps = _plan_path(
         algorithm=algorithm,
@@ -88,11 +102,26 @@ def run_dynamic_simulation(
     dynamic_events_applied = 0
     travelled_path = [current_position]
     final_goal_reached = False
+    waiting_steps = 0
+    total_waiting_steps = 0
 
     event_index = 0
-    max_steps = dynamic_map.width * dynamic_map.height
+    max_steps = dynamic_map.width * dynamic_map.height + max_wait_steps
 
     for step in range(max_steps):
+        _move_moving_obstacles(
+            algorithm=algorithm,
+            dynamic_map=dynamic_map,
+            moving_obstacles=obstacles,
+            record_keyframes=record_keyframes,
+            frame_callback=frame_callback,
+            keyframes=keyframes,
+            agent_position=current_position,
+            planned_path=current_path,
+            travelled_path=travelled_path,
+            step=step,
+        )
+
         applied_events, event_index = _apply_events(
             algorithm=algorithm,
             dynamic_map=dynamic_map,
@@ -112,47 +141,47 @@ def run_dynamic_simulation(
             final_goal_reached = True
             break
 
-        if is_path_blocked(dynamic_map, current_path, current_path_index):
-            _emit_replanning_started_keyframe(
-                keyframes=keyframes,
-                record_keyframes=record_keyframes,
-                frame_callback=frame_callback,
-                agent_position=current_position,
-                planned_path=current_path,
-                travelled_path=travelled_path,
-                dynamic_map=dynamic_map,
-                replanning_count=replanning_count + 1,
-            )
-            result, search_steps = _replan_path(
+        if is_path_blocked_with_lookahead(
+                dynamic_map,
+                current_path,
+                current_path_index,
+                path_block_lookahead,
+        ):
+            (
+                should_continue,
+                replanned_path,
+                current_path_index,
+                waiting_steps,
+                replan_time_ms,
+            ) = _handle_replanning(
                 algorithm=algorithm,
                 dynamic_map=dynamic_map,
-                start=current_position,
+                current_position=current_position,
                 goal=goal,
+                current_path=current_path,
+                current_path_index=current_path_index,
+                travelled_path=travelled_path,
                 step_record_interval=step_record_interval,
-            )
-            replanning_count += 1
-            total_execution_time_ms += result.execution_time_ms
-
-            if not result.found:
-                break
-
-            current_path = result.path
-            current_path_index = 0
-
-            _emit_keyframe(
+                wait_when_no_path=wait_when_no_path,
+                waiting_steps=waiting_steps,
+                max_wait_steps=max_wait_steps,
+                replanning_count=replanning_count,
                 keyframes=keyframes,
                 record_keyframes=record_keyframes,
                 frame_callback=frame_callback,
-                keyframe=_create_replan_keyframe(
-                    algorithm=algorithm,
-                    agent_position=current_position,
-                    planned_path=current_path,
-                    travelled_path=travelled_path,
-                    dynamic_map=dynamic_map,
-                    search_steps=search_steps,
-                    replanning_count=replanning_count,
-                ),
             )
+            replanning_count += 1
+            total_execution_time_ms += replan_time_ms
+
+            if not should_continue:
+                break
+
+            if replanned_path is None:
+                total_waiting_steps = waiting_steps
+                continue
+
+            current_path = replanned_path
+            waiting_steps = 0
 
         if current_path_index + 1 >= len(current_path):
             break
@@ -160,47 +189,42 @@ def run_dynamic_simulation(
         next_position = current_path[current_path_index + 1]
 
         if not dynamic_map.is_walkable(next_position):
-            _emit_replanning_started_keyframe(
-                keyframes=keyframes,
-                record_keyframes=record_keyframes,
-                frame_callback=frame_callback,
-                agent_position=current_position,
-                planned_path=current_path,
-                travelled_path=travelled_path,
-                dynamic_map=dynamic_map,
-                replanning_count=replanning_count + 1,
-            )
-            result, search_steps = _replan_path(
+            (
+                should_continue,
+                replanned_path,
+                current_path_index,
+                waiting_steps,
+                replan_time_ms,
+            ) = _handle_replanning(
                 algorithm=algorithm,
                 dynamic_map=dynamic_map,
-                start=current_position,
+                current_position=current_position,
                 goal=goal,
+                current_path=current_path,
+                current_path_index=current_path_index,
+                travelled_path=travelled_path,
                 step_record_interval=step_record_interval,
-            )
-            replanning_count += 1
-            total_execution_time_ms += result.execution_time_ms
-
-            if not result.found:
-                break
-
-            current_path = result.path
-            current_path_index = 0
-            next_position = current_path[current_path_index + 1]
-
-            _emit_keyframe(
+                wait_when_no_path=wait_when_no_path,
+                waiting_steps=waiting_steps,
+                max_wait_steps=max_wait_steps,
+                replanning_count=replanning_count,
                 keyframes=keyframes,
                 record_keyframes=record_keyframes,
                 frame_callback=frame_callback,
-                keyframe=_create_replan_keyframe(
-                    algorithm=algorithm,
-                    agent_position=current_position,
-                    planned_path=current_path,
-                    travelled_path=travelled_path,
-                    dynamic_map=dynamic_map,
-                    search_steps=search_steps,
-                    replanning_count=replanning_count,
-                ),
             )
+            replanning_count += 1
+            total_execution_time_ms += replan_time_ms
+
+            if not should_continue:
+                break
+
+            if replanned_path is None:
+                total_waiting_steps = waiting_steps
+                continue
+
+            current_path = replanned_path
+            next_position = current_path[current_path_index + 1]
+            waiting_steps = 0
 
         current_position = next_position
         current_path_index += 1
@@ -239,6 +263,7 @@ def run_dynamic_simulation(
         total_path_cost=AStar._calculate_path_cost(travelled_path),
         travelled_steps=max(len(travelled_path) - 1, 0),
         dynamic_events_applied=dynamic_events_applied,
+        waiting_steps=total_waiting_steps,
     )
     return stats, keyframes
 
@@ -327,6 +352,81 @@ def _plan_path(
     )
 
 
+def _handle_replanning(
+        algorithm,
+        dynamic_map: DynamicGridMap,
+        current_position: Position,
+        goal: Position,
+        current_path: list[Position],
+        current_path_index: int,
+        travelled_path: list[Position],
+        step_record_interval: int,
+        wait_when_no_path: bool,
+        waiting_steps: int,
+        max_wait_steps: int,
+        replanning_count: int,
+        keyframes: list[DynamicSimulationKeyframe],
+        record_keyframes: bool,
+        frame_callback: Callable[[DynamicSimulationKeyframe], None] | None,
+) -> tuple[bool, list[Position] | None, int, int, float]:
+    _emit_replanning_started_keyframe(
+        keyframes=keyframes,
+        record_keyframes=record_keyframes,
+        frame_callback=frame_callback,
+        agent_position=current_position,
+        planned_path=current_path,
+        travelled_path=travelled_path,
+        dynamic_map=dynamic_map,
+        replanning_count=replanning_count + 1,
+    )
+
+    result, search_steps = _replan_path(
+        algorithm=algorithm,
+        dynamic_map=dynamic_map,
+        start=current_position,
+        goal=goal,
+        step_record_interval=step_record_interval,
+    )
+
+    if result.found:
+        _emit_keyframe(
+            keyframes=keyframes,
+            record_keyframes=record_keyframes,
+            frame_callback=frame_callback,
+            keyframe=_create_replan_keyframe(
+                algorithm=algorithm,
+                agent_position=current_position,
+                planned_path=result.path,
+                travelled_path=travelled_path,
+                dynamic_map=dynamic_map,
+                search_steps=search_steps,
+                replanning_count=replanning_count + 1,
+            ),
+        )
+        return True, result.path, 0, 0, result.execution_time_ms
+
+    if wait_when_no_path and waiting_steps < max_wait_steps:
+        _emit_waiting_keyframe(
+            keyframes=keyframes,
+            record_keyframes=record_keyframes,
+            frame_callback=frame_callback,
+            agent_position=current_position,
+            planned_path=current_path,
+            travelled_path=travelled_path,
+            dynamic_map=dynamic_map,
+            waiting_steps=waiting_steps + 1,
+        )
+        return (
+            True,
+            None,
+            current_path_index,
+            waiting_steps + 1,
+            result.execution_time_ms,
+        )
+
+    return False, None, 0, waiting_steps, result.execution_time_ms
+
+
 def _replan_path(
         algorithm,
         dynamic_map: DynamicGridMap,
@@ -358,6 +458,51 @@ def _emit_keyframe(
 
     if frame_callback is not None:
         frame_callback(keyframe)
+
+
+def _move_moving_obstacles(
+        algorithm,
+        dynamic_map: DynamicGridMap,
+        moving_obstacles: list[MovingObstacle],
+        record_keyframes: bool,
+        frame_callback: Callable[[DynamicSimulationKeyframe], None] | None,
+        keyframes: list[DynamicSimulationKeyframe],
+        agent_position: Position,
+        planned_path: list[Position],
+        travelled_path: list[Position],
+        step: int,
+) -> None:
+    for obstacle in moving_obstacles:
+        affected_positions = move_obstacle(
+            obstacle=obstacle,
+            dynamic_map=dynamic_map,
+        )
+
+        if isinstance(algorithm, DStarLite):
+            algorithm.update_cells(affected_positions)
+
+        size_label = (
+            f"{obstacle.width}x{obstacle.height}"
+            if obstacle.width > 1 or obstacle.height > 1
+            else "1x1"
+        )
+        _emit_keyframe(
+            keyframes=keyframes,
+            record_keyframes=record_keyframes,
+            frame_callback=frame_callback,
+            keyframe=DynamicSimulationKeyframe(
+                frame_type="obstacle",
+                agent_position=agent_position,
+                planned_path=planned_path,
+                travelled_path=list(travelled_path),
+                dynamic_blocked=set(dynamic_map.dynamic_blocked),
+                new_obstacle_positions=affected_positions,
+                status_text=(
+                    f"Moving obstacle ({size_label}) "
+                    f"at ({obstacle.row}, {obstacle.col}) step {step}"
+                ),
+            ),
+        )
 
 
 def _apply_events(
@@ -433,6 +578,34 @@ def _create_search_keyframe(
     )
 
 
+def _emit_waiting_keyframe(
+        keyframes: list[DynamicSimulationKeyframe],
+        record_keyframes: bool,
+        frame_callback: Callable[[DynamicSimulationKeyframe], None] | None,
+        agent_position: Position,
+        planned_path: list[Position],
+        travelled_path: list[Position],
+        dynamic_map: DynamicGridMap,
+        waiting_steps: int,
+) -> None:
+    _emit_keyframe(
+        keyframes=keyframes,
+        record_keyframes=record_keyframes,
+        frame_callback=frame_callback,
+        keyframe=DynamicSimulationKeyframe(
+            frame_type="path_update",
+            agent_position=agent_position,
+            planned_path=planned_path,
+            travelled_path=list(travelled_path),
+            dynamic_blocked=set(dynamic_map.dynamic_blocked),
+            status_text=(
+                f"Waiting for obstacle to clear corridor... "
+                f"(step {waiting_steps})"
+            ),
+        ),
+    )
+
+
 def _emit_replanning_started_keyframe(
         keyframes: list[DynamicSimulationKeyframe],
         record_keyframes: bool,
@@ -505,4 +678,5 @@ def _build_failed_stats(
         total_path_cost=0.0,
         travelled_steps=0,
         dynamic_events_applied=0,
+        waiting_steps=0,
     )

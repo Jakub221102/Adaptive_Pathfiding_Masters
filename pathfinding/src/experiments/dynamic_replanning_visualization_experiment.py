@@ -1,4 +1,8 @@
-from pathfinding.src.core.dynamic_models import DynamicGridMap, DynamicObstacleEvent
+from pathfinding.src.core.dynamic_models import (
+    DynamicGridMap,
+    DynamicObstacleEvent,
+    MovingObstacle,
+)
 from pathfinding.src.core.models import GridMap, Scenario
 from pathfinding.src.experiments.algorithm_registry import create_algorithm
 from pathfinding.src.experiments.base_experiment import BaseExperiment
@@ -14,13 +18,15 @@ class DynamicReplanningVisualizationExperiment(BaseExperiment):
     def __init__(
             self,
             config: ExperimentConfig,
-            events: list[DynamicObstacleEvent],
+            events: list[DynamicObstacleEvent] | None = None,
             *,
+            moving_obstacles: list[MovingObstacle] | None = None,
             grid_map: GridMap | None = None,
             scenario: Scenario | None = None,
     ) -> None:
         super().__init__(config)
-        self.events = sorted(events, key=lambda event: event.step_index)
+        self.events = sorted(events or [], key=lambda event: event.step_index)
+        self.moving_obstacles = list(moving_obstacles or [])
         self._grid_map_override = grid_map
         self._scenario_override = scenario
 
@@ -61,8 +67,12 @@ class DynamicReplanningVisualizationExperiment(BaseExperiment):
             dynamic_map=dynamic_map,
             scenario=scenario,
             events=self.events,
+            moving_obstacles=self.moving_obstacles,
             frame_callback=presenter.present_keyframe,
             step_record_interval=self.config.step_record_interval,
+            path_block_lookahead=self.config.path_block_lookahead,
+            wait_when_no_path=self.config.wait_when_no_path,
+            max_wait_steps=self.config.max_wait_steps,
         )
 
         presenter.finalize()

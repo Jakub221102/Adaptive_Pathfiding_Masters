@@ -33,6 +33,10 @@ class ExperimentConfig(BaseModel):
     obstacle_hold_frames: int = Field(default=3, ge=1)
     obstacle_frame_delay_ms: int = Field(default=1, ge=0)
 
+    path_block_lookahead: int = Field(default=8, gt=0)
+    wait_when_no_path: bool = True
+    max_wait_steps: int = Field(default=30, ge=0)
+
     show_cluster_overlay: bool = False
     cluster_size: int = Field(default=32, gt=0)
     max_entrances_per_cluster_pair: int = Field(default=2, gt=0)

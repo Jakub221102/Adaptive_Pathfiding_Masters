@@ -46,6 +46,9 @@ class DynamicReplanningExperiment(BaseExperiment):
             scenario=scenario,
             events=self.events,
             step_record_interval=self.config.step_record_interval,
+            path_block_lookahead=self.config.path_block_lookahead,
+            wait_when_no_path=self.config.wait_when_no_path,
+            max_wait_steps=self.config.max_wait_steps,
         )
         self._print_stats(stats)
         return stats
@@ -57,6 +60,7 @@ class DynamicReplanningExperiment(BaseExperiment):
         print(f"Final goal reached: {stats.final_goal_reached}")
         print(f"Replanning count: {stats.replanning_count}")
         print(f"Dynamic events applied: {stats.dynamic_events_applied}")
+        print(f"Waiting steps: {stats.waiting_steps}")
         print(f"Travelled steps: {stats.travelled_steps}")
         print(f"Total path cost: {stats.total_path_cost:.3f}")
         print(f"Total execution time: {stats.total_execution_time_ms:.3f} ms")

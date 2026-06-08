@@ -24,6 +24,8 @@ class DynamicFramePresenter:
         self._running = True
         self._pending_move_keyframe: DynamicSimulationKeyframe | None = None
         self._move_frames_since_present = 0
+        self._pending_obstacle_keyframe: DynamicSimulationKeyframe | None = None
+        self._obstacle_frames_since_present = 0
 
     @property
     def running(self) -> bool:
@@ -31,6 +33,7 @@ class DynamicFramePresenter:
 
     def finalize(self) -> None:
         self._flush_pending_move()
+        self._flush_pending_obstacle()
 
     def present_keyframe(self, keyframe: DynamicSimulationKeyframe) -> None:
         if not self._running:
@@ -47,14 +50,22 @@ class DynamicFramePresenter:
 
             return
 
+        if keyframe.frame_type == "obstacle":
+            self._pending_obstacle_keyframe = keyframe
+            self._obstacle_frames_since_present += 1
+
+            if self._obstacle_frames_since_present >= self.config.movement_steps_per_frame:
+                self._present_obstacle(self._pending_obstacle_keyframe)
+                self._pending_obstacle_keyframe = None
+                self._obstacle_frames_since_present = 0
+
+            return
+
         self._flush_pending_move()
+        self._flush_pending_obstacle()
 
         if keyframe.frame_type == "search":
             self._present_search(keyframe)
-            return
-
-        if keyframe.frame_type == "obstacle":
-            self._present_obstacle(keyframe)
             return
 
         if keyframe.frame_type == "path_update":
@@ -68,6 +79,14 @@ class DynamicFramePresenter:
         self._present_move(self._pending_move_keyframe)
         self._pending_move_keyframe = None
         self._move_frames_since_present = 0
+
+    def _flush_pending_obstacle(self) -> None:
+        if self._pending_obstacle_keyframe is None:
+            return
+
+        self._present_obstacle(self._pending_obstacle_keyframe)
+        self._pending_obstacle_keyframe = None
+        self._obstacle_frames_since_present = 0
 
     def _present_search(self, keyframe: DynamicSimulationKeyframe) -> None:
         search_frame = self._to_playback_frame(keyframe).model_copy(

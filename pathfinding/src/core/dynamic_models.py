@@ -155,6 +155,7 @@ class DynamicReplanningStats(BaseModel):
     travelled_steps: int
 
     dynamic_events_applied: int
+    waiting_steps: int = 0
 
 
 def is_path_blocked(
@@ -167,3 +168,93 @@ def is_path_blocked(
             return True
 
     return False
+
+
+def is_path_blocked_with_lookahead(
+        grid_map: DynamicGridMap,
+        path: list[Position],
+        current_index: int,
+        lookahead_steps: int,
+) -> bool:
+    end_index = min(current_index + lookahead_steps, len(path))
+
+    for position in path[current_index:end_index]:
+        if not grid_map.is_walkable(position):
+            return True
+
+    return False
+
+
+class MovingObstacle(BaseModel):
+    row: int
+    col: int
+
+    width: int = 1
+    height: int = 1
+
+    delta_row: int
+    delta_col: int
+
+
+def get_occupied_positions(obstacle: MovingObstacle) -> list[Position]:
+    return iter_rectangle_positions(
+        position=Position(row=obstacle.row, col=obstacle.col),
+        width=obstacle.width,
+        height=obstacle.height,
+    )
+
+
+def _obstacle_fits(
+        dynamic_map: DynamicGridMap,
+        row: int,
+        col: int,
+        width: int,
+        height: int,
+) -> bool:
+    if row < 0 or col < 0:
+        return False
+
+    if row + height > dynamic_map.height:
+        return False
+
+    if col + width > dynamic_map.width:
+        return False
+
+    return True
+
+
+def move_obstacle(
+        obstacle: MovingObstacle,
+        dynamic_map: DynamicGridMap,
+) -> list[Position]:
+    old_positions = get_occupied_positions(obstacle)
+
+    for position in old_positions:
+        if dynamic_map.in_bounds(position):
+            dynamic_map.unblock_cell(position)
+
+    new_row = obstacle.row + obstacle.delta_row
+    new_col = obstacle.col + obstacle.delta_col
+
+    if not _obstacle_fits(
+            dynamic_map=dynamic_map,
+            row=new_row,
+            col=new_col,
+            width=obstacle.width,
+            height=obstacle.height,
+    ):
+        obstacle.delta_row = -obstacle.delta_row
+        obstacle.delta_col = -obstacle.delta_col
+        new_row = obstacle.row + obstacle.delta_row
+        new_col = obstacle.col + obstacle.delta_col
+
+    obstacle.row = new_row
+    obstacle.col = new_col
+
+    new_positions = dynamic_map.block_rectangle(
+        position=Position(row=obstacle.row, col=obstacle.col),
+        width=obstacle.width,
+        height=obstacle.height,
+    )
+
+    return old_positions + new_positions
