@@ -84,6 +84,9 @@ Analizowane: query/preprocessing time, path quality, found rate, abstract nodes 
 - Path cost: poziomy, pionowy, diagonalny.
 - JPS: zgodność kosztu z A*, brak ścieżki.
 - HPA*: poprawne wyszukiwanie i statystyki preprocessingu.
+- D\* Lite: podstawowe replanning i aktualizacja kosztów.
+- DynamicGridMap, moving obstacle generator, kolizje ruchomych przeszkód.
+- Dynamic benchmark: eksport CSV, wybór scenariuszy.
 
 ### Regression (MovingAI, mały scenariusz)
 
@@ -91,6 +94,7 @@ Analizowane: query/preprocessing time, path quality, found rate, abstract nodes 
 - Zgodność kosztu A\* i JPS z A\*.
 - Ograniczenie degradacji jakości HPA\*.
 - Limity `visited_nodes`.
+- Dynamic replanning: A\* i D\* Lite na scenariuszach z przeszkodami.
 - **Nie testujemy** czasów wykonania w regresji.
 
 ---
@@ -108,14 +112,39 @@ Analizowane: query/preprocessing time, path quality, found rate, abstract nodes 
 
 ---
 
-## Planowane etapy (dynamiczne środowisko)
+## Stan — środowisko dynamiczne (zrealizowane)
+
+### Modele i symulacja
+
+- `DynamicGridMap` — nakładka na `GridMap` z `dynamic_blocked` / `dynamic_unblocked`.
+- `DynamicObstacleEvent` — zdarzenia `BLOCK` / `UNBLOCK` w krokach symulacji.
+- `MovingObstacle` — prostokątne przeszkody ruchome (odbicia od ścian).
+- `moving_obstacle_generator` — deterministyczna generacja (seed), `min_obstacle_spacing`, wykluczenie start/cel.
+- `dynamic_simulation.py` — replanning z lookahead, waiting policy, collision policy (`PUSH_AGENT` / `BLOCK_OBSTACLE`), predykcja przeszkód.
+
+Logika kolizji i oczekiwania agenta jest w **warstwie symulacji**, nie w A\* / D\* Lite.
+
+### Algorytmy dynamiczne
+
+| Algorytm | Status |
+|----------|--------|
+| **A\* replanning** | Stabilny — pełne przeliczenie przy blokadzie ścieżki |
+| **D\* Lite** | Stabilny — replanning przyrostowy; implementacja edukacyjna |
+
+### Benchmark dynamiczny
+
+- `DynamicBenchmarkExperiment`: A\* vs D\* Lite, wspólny setup przeszkód per scenariusz.
+- CSV: `Results/dynamic_algorithms/`; wykresy: `pathfinding/plots/plot_dynamic_benchmark_results.py`.
+- Szczegóły metryk: [`DYNAMIC_BENCHMARK.md`](DYNAMIC_BENCHMARK.md).
+
+### Kolejne etapy (roadmap)
 
 | Kolejność | Temat |
 |-----------|--------|
-| 1 | Dynamic obstacles — dodawanie/usuwanie przeszkód w runtime |
-| 2 | A\* replanning po zmianie mapy |
-| 3 | D\* Lite |
-| 4 | Analiza: A\* replanning vs D\* Lite vs HPA\* (czas reakcji, jakość ścieżki, liczba przeliczanych węzłów) |
+| 1 | Benchmark dynamiczny na wielu seedach / mapach |
+| 2 | Lepsza predykcja czasowa przeszkód |
+| 3 | HPA\* w benchmarku dynamicznym |
+| 4 | MAPF / CBS / reservation tables |
 
 ---
 
@@ -136,6 +165,9 @@ Analizowane: query/preprocessing time, path quality, found rate, abstract nodes 
 | Algorytmy | `pathfinding/src/algorithms/` |
 | HPA\* | `pathfinding/src/algorithms/hpa/` |
 | Eksperymenty | `pathfinding/src/experiments/` |
-| Benchmarki | `pathfinding/scripts/benchmark_main.py`, `benchmark_experiment.py` |
+| Benchmarki statyczne | `pathfinding/scripts/benchmark_main.py`, `benchmark_experiment.py` |
+| Benchmark dynamiczny | `pathfinding/scripts/dynamic_benchmark_main.py`, `dynamic_benchmark_experiment.py` |
+| Symulacja dynamiczna | `pathfinding/src/experiments/dynamic_simulation.py` |
 | Testy | `pathfinding/tests/unit/`, `pathfinding/tests/regression/` |
 | Wykresy | `pathfinding/plots/` |
+| Dokumentacja dynamiczna | `docs/DYNAMIC_BENCHMARK.md` |
