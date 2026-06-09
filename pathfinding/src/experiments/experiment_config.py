@@ -43,6 +43,7 @@ class ExperimentConfig(BaseModel):
     moving_obstacle_collision_policy: MovingObstacleCollisionPolicy = (
         MovingObstacleCollisionPolicy.PUSH_AGENT
     )
+    record_algorithm_steps: bool = True
 
     show_cluster_overlay: bool = False
     cluster_size: int = Field(default=32, gt=0)

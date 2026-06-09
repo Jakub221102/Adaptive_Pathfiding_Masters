@@ -11,6 +11,7 @@ class DynamicBenchmarkConfig(BaseModel):
 
     min_obstacle_size: int = Field(default=6, ge=1)
     max_obstacle_size: int = Field(default=16, ge=1)
+    min_obstacle_spacing: int = Field(default=20, ge=0)
 
     path_block_lookahead: int = Field(default=40, gt=0)
     wait_when_no_path: bool = True

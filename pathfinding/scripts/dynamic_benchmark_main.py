@@ -12,7 +12,7 @@ def main() -> None:
         map_path=Path("../../Data/bg512-map/AR0204SR.map"),
         scen_path=Path("../../Data/bg512-scen/AR0204SR.map.scen"),
         min_optimal_length=100,
-        benchmark_scenarios=20,
+        benchmark_scenarios=50,
         results_dir=Path("../../Results/dynamic_algorithms"),
         benchmark_output_file="astar_vs_dstar_dynamic_seed_42.csv",
         path_block_lookahead=20,
@@ -23,12 +23,13 @@ def main() -> None:
     )
 
     benchmark_config = DynamicBenchmarkConfig(
-        scenario_count=20,
+        scenario_count=50,
         min_optimal_length=100,
         obstacle_count=4,
         obstacle_seed=42,
         min_obstacle_size=4,
         max_obstacle_size=10,
+        min_obstacle_spacing=25,
         path_block_lookahead=20,
         wait_when_no_path=True,
         max_wait_steps=30,

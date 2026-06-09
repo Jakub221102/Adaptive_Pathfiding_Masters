@@ -1,6 +1,9 @@
+from itertools import combinations
+
 from pathfinding.src.core.dynamic_models import get_occupied_positions
 from pathfinding.src.core.moving_obstacle_generator import (
     MovingObstacleGeneratorConfig,
+    _obstacle_center,
     generate_moving_obstacles,
 )
 from pathfinding.src.core.models import Position, Scenario
@@ -107,3 +110,61 @@ def test_generator_creates_valid_directions() -> None:
 
     for obstacle in obstacles:
         assert (obstacle.delta_row, obstacle.delta_col) in _VALID_DIRECTIONS
+
+
+def _chebyshev_center_distance(
+        obstacle_a,
+        obstacle_b,
+) -> float:
+    center_a = _obstacle_center(obstacle_a)
+    center_b = _obstacle_center(obstacle_b)
+    return max(
+        abs(center_a[0] - center_b[0]),
+        abs(center_a[1] - center_b[1]),
+    )
+
+
+def test_generator_respects_min_obstacle_spacing() -> None:
+    grid_map = build_grid_map(_open_grid(100, 100))
+
+    obstacles = generate_moving_obstacles(
+        grid_map=grid_map,
+        config=MovingObstacleGeneratorConfig(
+            seed=42,
+            obstacle_count=10,
+            min_obstacle_spacing=20,
+        ),
+    )
+
+    for obstacle_a, obstacle_b in combinations(obstacles, 2):
+        assert _chebyshev_center_distance(obstacle_a, obstacle_b) >= 20
+
+
+def test_min_obstacle_spacing_zero_preserves_generation() -> None:
+    grid_map = build_grid_map(_open_grid(50, 50))
+
+    obstacles = generate_moving_obstacles(
+        grid_map=grid_map,
+        config=MovingObstacleGeneratorConfig(
+            seed=42,
+            obstacle_count=10,
+            min_obstacle_spacing=0,
+        ),
+    )
+
+    assert len(obstacles) > 0
+
+
+def test_too_large_min_obstacle_spacing_returns_fewer_obstacles() -> None:
+    grid_map = build_grid_map(_open_grid(20, 20))
+
+    obstacles = generate_moving_obstacles(
+        grid_map=grid_map,
+        config=MovingObstacleGeneratorConfig(
+            seed=42,
+            obstacle_count=10,
+            min_obstacle_spacing=100,
+        ),
+    )
+
+    assert len(obstacles) <= 10

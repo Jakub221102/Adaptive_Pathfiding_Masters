@@ -68,7 +68,10 @@ def run_dynamic_simulation(
     current_position = scenario.start
     goal = scenario.goal
     keyframes: list[DynamicSimulationKeyframe] = []
-    obstacles = list(moving_obstacles or [])
+    obstacles = [
+        obstacle.model_copy()
+        for obstacle in (moving_obstacles or [])
+    ]
 
     for obstacle in obstacles:
         dynamic_map.block_rectangle(

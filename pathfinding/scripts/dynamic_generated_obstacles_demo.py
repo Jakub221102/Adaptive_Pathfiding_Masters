@@ -55,6 +55,7 @@ def main() -> None:
             max_width=10,
             min_height=6,
             max_height=10,
+            min_obstacle_spacing=30,
         ),
         forbidden_positions=forbidden_positions,
     )

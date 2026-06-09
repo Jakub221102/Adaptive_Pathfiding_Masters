@@ -74,12 +74,14 @@ class DynamicReplanningVisualizationExperiment(BaseExperiment):
             wait_when_no_path=self.config.wait_when_no_path,
             max_wait_steps=self.config.max_wait_steps,
             max_stuck_steps=self.config.max_stuck_steps,
+            max_simulation_steps=self.config.max_simulation_steps,
             moving_obstacle_collision_policy=(
                 self.config.moving_obstacle_collision_policy
             ),
             moving_obstacle_prediction_steps=(
                 self.config.moving_obstacle_prediction_steps
             ),
+            record_algorithm_steps=self.config.record_algorithm_steps,
         )
 
         presenter.finalize()

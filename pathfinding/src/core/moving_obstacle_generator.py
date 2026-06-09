@@ -25,6 +25,46 @@ class MovingObstacleGeneratorConfig(BaseModel):
     allow_vertical: bool = True
     allow_horizontal: bool = True
 
+    min_obstacle_spacing: int = Field(default=20, ge=0)
+
+
+def _obstacle_center(obstacle: MovingObstacle) -> tuple[float, float]:
+    return (
+        obstacle.row + obstacle.height / 2,
+        obstacle.col + obstacle.width / 2,
+    )
+
+
+def _obstacles_too_close(
+        candidate_row: int,
+        candidate_col: int,
+        candidate_width: int,
+        candidate_height: int,
+        existing_obstacles: list[MovingObstacle],
+        min_spacing: int,
+) -> bool:
+    if min_spacing <= 0:
+        return False
+
+    candidate_center = (
+        candidate_row + candidate_height / 2,
+        candidate_col + candidate_width / 2,
+    )
+
+    for obstacle in existing_obstacles:
+        obstacle_center = _obstacle_center(obstacle)
+
+        # Chebyshev distance, because grid movement is 8-directional
+        distance = max(
+            abs(candidate_center[0] - obstacle_center[0]),
+            abs(candidate_center[1] - obstacle_center[1]),
+        )
+
+        if distance < min_spacing:
+            return True
+
+    return False
+
 
 def _rectangle_is_valid(
         grid_map: GridMap,
@@ -112,6 +152,16 @@ def generate_moving_obstacles(
                 width=width,
                 height=height,
                 forbidden_positions=forbidden,
+        ):
+            continue
+
+        if _obstacles_too_close(
+                candidate_row=row,
+                candidate_col=col,
+                candidate_width=width,
+                candidate_height=height,
+                existing_obstacles=obstacles,
+                min_spacing=config.min_obstacle_spacing,
         ):
             continue
 

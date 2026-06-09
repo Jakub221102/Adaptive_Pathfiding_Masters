@@ -2,13 +2,16 @@ import csv
 from pathlib import Path
 
 from pathfinding.src.core.benchmark_models import DynamicBenchmarkConfig, DynamicBenchmarkResult
+from pathfinding.src.core.dynamic_models import DynamicGridMap, MovingObstacle, MovingObstacleCollisionPolicy
 from pathfinding.src.core.models import Position, Scenario
+from pathfinding.src.experiments.algorithm_registry import create_algorithm
 from pathfinding.src.experiments.dynamic_benchmark_experiment import (
     DynamicBenchmarkExperiment,
     compute_distribution_stats,
     generate_scenario_obstacles,
 )
-from pathfinding.src.experiments.experiment_config import ExperimentConfig
+from pathfinding.src.experiments.dynamic_simulation import run_dynamic_simulation
+from pathfinding.src.experiments.experiment_config import AlgorithmName, ExperimentConfig
 from pathfinding.tests.helpers import build_grid_map
 
 
@@ -153,6 +156,53 @@ def test_dynamic_benchmark_writes_csv(tmp_path: Path) -> None:
 
     for row in rows:
         assert float(row["wall_clock_s"]) >= 0.0
+
+
+def test_run_dynamic_simulation_does_not_mutate_shared_obstacles() -> None:
+    grid_map = build_grid_map(
+        [
+            [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+            [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+            [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+            [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+            [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        ],
+        name="shared_obstacle_map",
+    )
+    scenario = Scenario(
+        map_name=grid_map.name,
+        width=grid_map.width,
+        height=grid_map.height,
+        start=Position(row=1, col=1),
+        goal=Position(row=1, col=10),
+        optimal_length=9.0,
+    )
+    obstacles = [
+        MovingObstacle(row=2, col=4, width=2, height=1, delta_row=0, delta_col=1),
+        MovingObstacle(row=3, col=7, width=1, height=2, delta_row=-1, delta_col=0),
+    ]
+    initial_state = [
+        (obstacle.row, obstacle.col, obstacle.delta_row, obstacle.delta_col)
+        for obstacle in obstacles
+    ]
+
+    dynamic_map = DynamicGridMap(base_map=grid_map)
+    algorithm = create_algorithm(AlgorithmName.ASTAR)
+    run_dynamic_simulation(
+        algorithm=algorithm,
+        dynamic_map=dynamic_map,
+        scenario=scenario,
+        events=[],
+        moving_obstacles=obstacles,
+        record_algorithm_steps=False,
+        max_simulation_steps=200,
+        moving_obstacle_collision_policy=MovingObstacleCollisionPolicy.PUSH_AGENT,
+    )
+
+    assert [
+        (obstacle.row, obstacle.col, obstacle.delta_row, obstacle.delta_col)
+        for obstacle in obstacles
+    ] == initial_state
 
 
 def test_summary_distribution_stats_with_outliers() -> None:

@@ -140,6 +140,7 @@ def generate_scenario_obstacles(
             max_row=max_row,
             min_col=min_col,
             max_col=max_col,
+            min_obstacle_spacing=benchmark_config.min_obstacle_spacing,
         ),
         forbidden_positions=forbidden_positions,
     )
