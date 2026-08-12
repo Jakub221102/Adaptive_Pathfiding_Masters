@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
 
 from pathfinding.src.core.models import Position
@@ -10,24 +12,20 @@ class MAPFAgent:
     goal: Position
 
 
-@dataclass(frozen=True, slots=True, eq=False)
+@dataclass(frozen=True, slots=True)
 class TimedState:
-    position: Position
+    row: int
+    col: int
     timestep: int
 
     def __post_init__(self) -> None:
+        if self.row < 0:
+            raise ValueError("row must be non-negative")
+        if self.col < 0:
+            raise ValueError("col must be non-negative")
         if self.timestep < 0:
             raise ValueError("timestep must be non-negative")
 
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, TimedState):
-            return NotImplemented
-
-        return (
-            self.position.row == other.position.row
-            and self.position.col == other.position.col
-            and self.timestep == other.timestep
-        )
-
-    def __hash__(self) -> int:
-        return hash((self.position.row, self.position.col, self.timestep))
+    @classmethod
+    def from_position(cls, position: Position, timestep: int) -> TimedState:
+        return cls(row=position.row, col=position.col, timestep=timestep)
