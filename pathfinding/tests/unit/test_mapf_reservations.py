@@ -1,5 +1,6 @@
 import pytest
 
+from pathfinding.src.algorithms.mapf.conflicts import detect_conflicts
 from pathfinding.src.algorithms.mapf.models import (
     AgentPath,
     Constraint,
@@ -374,32 +375,51 @@ def test_one_state_path_generates_vertex_and_goal_padding_only() -> None:
     )
 
 
-def test_generated_reservations_are_usable_by_space_time_astar() -> None:
-    grid_map = build_grid_map(
-        [
-            [0, 0, 0],
-            [0, 0, 0],
-        ]
-    )
-    higher_priority = _path(0, [(0, 0, 0), (0, 1, 1), (0, 2, 2)])
-    constraints = build_reservation_constraints(
-        planned_paths=(higher_priority,),
-        target_agent_id=1,
-        max_timestep=6,
-    )
+def test_generated_reservations_force_target_agent_to_wait() -> None:
+    grid_map = build_grid_map([[0, 0, 0]])
+    higher_priority = _path(0, [(0, 1, 1)])
     target_agent = MAPFAgent(
         agent_id=1,
-        start=Position(row=1, col=0),
-        goal=Position(row=1, col=2),
+        start=Position(row=0, col=0),
+        goal=Position(row=0, col=2),
+    )
+    search_horizon = 4
+
+    reservations = build_reservation_constraints(
+        planned_paths=(higher_priority,),
+        target_agent_id=target_agent.agent_id,
+        max_timestep=1,
     )
 
-    path = find_path(
+    unconstrained_path = find_path(
         grid_map=grid_map,
         agent=target_agent,
-        max_timestep=6,
-        constraints=constraints,
+        max_timestep=search_horizon,
+    )
+    constrained_path = find_path(
+        grid_map=grid_map,
+        agent=target_agent,
+        max_timestep=search_horizon,
+        constraints=reservations,
     )
 
-    assert path is not None
-    _assert_path_respects_constraints(path, agent_id=1, constraints=constraints)
-    assert path.states[-1] == TimedState(row=1, col=2, timestep=path.states[-1].timestep)
+    assert unconstrained_path is not None
+    assert unconstrained_path.states == (
+        TimedState(row=0, col=0, timestep=0),
+        TimedState(row=0, col=1, timestep=1),
+        TimedState(row=0, col=2, timestep=2),
+    )
+    assert detect_conflicts((higher_priority, unconstrained_path)) != ()
+
+    assert constrained_path is not None
+    assert constrained_path.states == (
+        TimedState(row=0, col=0, timestep=0),
+        TimedState(row=0, col=0, timestep=1),
+        TimedState(row=0, col=1, timestep=2),
+        TimedState(row=0, col=2, timestep=3),
+    )
+    _assert_path_respects_constraints(
+        constrained_path,
+        agent_id=target_agent.agent_id,
+        constraints=reservations,
+    )
