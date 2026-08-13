@@ -12,6 +12,7 @@ from pathfinding.src.algorithms.mapf.models import (
     VertexConflict,
     VertexConstraint,
 )
+from pathfinding.src.algorithms.mapf.space_time_astar import find_path
 
 __all__ = [
     "AgentPath",
@@ -26,4 +27,5 @@ __all__ = [
     "VertexConflict",
     "VertexConstraint",
     "detect_conflicts",
+    "find_path",
 ]
