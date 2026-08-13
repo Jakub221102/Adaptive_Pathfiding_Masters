@@ -376,30 +376,35 @@ def test_one_state_path_generates_vertex_and_goal_padding_only() -> None:
 
 
 def test_generated_reservations_force_target_agent_to_wait() -> None:
-    grid_map = build_grid_map([[0, 0, 0]])
-    higher_priority = _path(0, [(0, 1, 1)])
+    grid_map = build_grid_map(
+        [
+            [0, 0, 0],
+            [0, 0, 0],
+        ]
+    )
+    higher_priority = _path(0, [(1, 1, 0), (0, 1, 1), (1, 1, 2)])
     target_agent = MAPFAgent(
         agent_id=1,
         start=Position(row=0, col=0),
         goal=Position(row=0, col=2),
     )
-    search_horizon = 4
+    max_timestep = 4
 
     reservations = build_reservation_constraints(
         planned_paths=(higher_priority,),
         target_agent_id=target_agent.agent_id,
-        max_timestep=1,
+        max_timestep=max_timestep,
     )
 
     unconstrained_path = find_path(
         grid_map=grid_map,
         agent=target_agent,
-        max_timestep=search_horizon,
+        max_timestep=max_timestep,
     )
     constrained_path = find_path(
         grid_map=grid_map,
         agent=target_agent,
-        max_timestep=search_horizon,
+        max_timestep=max_timestep,
         constraints=reservations,
     )
 
@@ -412,6 +417,7 @@ def test_generated_reservations_force_target_agent_to_wait() -> None:
     assert detect_conflicts((higher_priority, unconstrained_path)) != ()
 
     assert constrained_path is not None
+    assert constrained_path != unconstrained_path
     assert constrained_path.states == (
         TimedState(row=0, col=0, timestep=0),
         TimedState(row=0, col=0, timestep=1),
@@ -423,3 +429,4 @@ def test_generated_reservations_force_target_agent_to_wait() -> None:
         agent_id=target_agent.agent_id,
         constraints=reservations,
     )
+    assert detect_conflicts((higher_priority, constrained_path)) == ()
