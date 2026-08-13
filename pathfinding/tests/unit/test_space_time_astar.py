@@ -1,7 +1,18 @@
 import pytest
 
-from pathfinding.src.algorithms.mapf.models import AgentPath, MAPFAgent, TimedState
-from pathfinding.src.algorithms.mapf.space_time_astar import _successors, find_path
+from pathfinding.src.algorithms.mapf.models import (
+    AgentPath,
+    Constraint,
+    EdgeConstraint,
+    MAPFAgent,
+    TimedState,
+    VertexConstraint,
+)
+from pathfinding.src.algorithms.mapf.space_time_astar import (
+    _build_constraint_index,
+    _successors,
+    find_path,
+)
 from pathfinding.src.core.models import Position
 from pathfinding.tests.helpers import build_grid_map
 
@@ -18,6 +29,46 @@ def _agent(
         start=Position(row=start_row, col=start_col),
         goal=Position(row=goal_row, col=goal_col),
     )
+
+
+def _empty_constraints(agent_id: int, max_timestep: int):
+    return _build_constraint_index(agent_id=agent_id, constraints=(), max_timestep=max_timestep)
+
+
+def _assert_path_respects_constraints(
+    path: AgentPath,
+    agent_id: int,
+    constraints: tuple[Constraint, ...],
+) -> None:
+    vertex_constraints = {
+        (constraint.row, constraint.col, constraint.timestep)
+        for constraint in constraints
+        if isinstance(constraint, VertexConstraint) and constraint.agent_id == agent_id
+    }
+    edge_constraints = {
+        (
+            constraint.from_row,
+            constraint.from_col,
+            constraint.to_row,
+            constraint.to_col,
+            constraint.timestep,
+        )
+        for constraint in constraints
+        if isinstance(constraint, EdgeConstraint) and constraint.agent_id == agent_id
+    }
+
+    for state in path.states:
+        assert (state.row, state.col, state.timestep) not in vertex_constraints
+
+    for previous, current in zip(path.states[:-1], path.states[1:], strict=True):
+        transition = (
+            previous.row,
+            previous.col,
+            current.row,
+            current.col,
+            current.timestep,
+        )
+        assert transition not in edge_constraints
 
 
 def test_adjacent_start_and_goal_returns_two_states() -> None:
@@ -153,7 +204,12 @@ def test_successor_model_includes_wait() -> None:
     grid_map = build_grid_map([[0]])
     current = TimedState(row=0, col=0, timestep=0)
 
-    successors = _successors(grid_map=grid_map, state=current, max_timestep=3)
+    successors = _successors(
+        grid_map=grid_map,
+        state=current,
+        max_timestep=3,
+        constraint_index=_empty_constraints(agent_id=0, max_timestep=3),
+    )
 
     assert TimedState(row=0, col=0, timestep=1) in successors
 
@@ -197,3 +253,353 @@ def test_negative_max_timestep_raises_value_error() -> None:
 
     with pytest.raises(ValueError, match="max_timestep must be non-negative"):
         find_path(grid_map=grid_map, agent=agent, max_timestep=-1)
+
+
+def test_vertex_constraint_blocks_direct_shortest_path() -> None:
+    grid_map = build_grid_map([[0, 0, 0]])
+    agent = _agent(agent_id=0, start_row=0, start_col=0, goal_row=0, goal_col=2)
+    constraints = (
+        VertexConstraint(agent_id=0, row=0, col=1, timestep=1),
+    )
+
+    path = find_path(
+        grid_map=grid_map,
+        agent=agent,
+        max_timestep=1,
+        constraints=constraints,
+    )
+
+    assert path is None
+
+
+def test_solver_uses_wait_when_vertex_constraint_expires() -> None:
+    grid_map = build_grid_map([[0, 0, 0]])
+    agent = _agent(agent_id=0, start_row=0, start_col=0, goal_row=0, goal_col=2)
+    constraints = (
+        VertexConstraint(agent_id=0, row=0, col=1, timestep=1),
+    )
+
+    path = find_path(
+        grid_map=grid_map,
+        agent=agent,
+        max_timestep=6,
+        constraints=constraints,
+    )
+
+    assert path is not None
+    assert path.states == (
+        TimedState(row=0, col=0, timestep=0),
+        TimedState(row=0, col=0, timestep=1),
+        TimedState(row=0, col=1, timestep=2),
+        TimedState(row=0, col=2, timestep=3),
+    )
+    _assert_path_respects_constraints(path, agent_id=0, constraints=constraints)
+
+
+def test_vertex_constraint_can_force_spatial_detour() -> None:
+    grid_map = build_grid_map(
+        [
+            [0, 0, 0],
+            [0, 0, 0],
+        ]
+    )
+    agent = _agent(agent_id=0, start_row=0, start_col=0, goal_row=0, goal_col=2)
+    constraints = (
+        VertexConstraint(agent_id=0, row=0, col=1, timestep=1),
+    )
+
+    path = find_path(
+        grid_map=grid_map,
+        agent=agent,
+        max_timestep=6,
+        constraints=constraints,
+    )
+
+    assert path is not None
+    assert (0, 1) not in {(state.row, state.col) for state in path.states if state.timestep == 1}
+    assert path.states[-1] == TimedState(row=0, col=2, timestep=path.states[-1].timestep)
+    _assert_path_respects_constraints(path, agent_id=0, constraints=constraints)
+
+
+def test_vertex_constraint_at_timestep_zero_on_start_causes_failure() -> None:
+    grid_map = build_grid_map([[0, 0]])
+    agent = _agent(agent_id=0, start_row=0, start_col=0, goal_row=0, goal_col=1)
+    constraints = (
+        VertexConstraint(agent_id=0, row=0, col=0, timestep=0),
+    )
+
+    path = find_path(
+        grid_map=grid_map,
+        agent=agent,
+        max_timestep=5,
+        constraints=constraints,
+    )
+
+    assert path is None
+
+
+def test_constraint_for_other_agent_is_ignored() -> None:
+    grid_map = build_grid_map([[0, 0, 0]])
+    agent = _agent(agent_id=0, start_row=0, start_col=0, goal_row=0, goal_col=2)
+    constraints = (
+        VertexConstraint(agent_id=1, row=0, col=1, timestep=1),
+    )
+
+    path = find_path(
+        grid_map=grid_map,
+        agent=agent,
+        max_timestep=5,
+        constraints=constraints,
+    )
+
+    assert path is not None
+    assert path.states == (
+        TimedState(row=0, col=0, timestep=0),
+        TimedState(row=0, col=1, timestep=1),
+        TimedState(row=0, col=2, timestep=2),
+    )
+
+
+def test_directed_edge_constraint_blocks_transition_at_arrival_timestep() -> None:
+    grid_map = build_grid_map([[0, 0]])
+    agent = _agent(agent_id=0, start_row=0, start_col=0, goal_row=0, goal_col=1)
+    constraints = (
+        EdgeConstraint(
+            agent_id=0,
+            from_row=0,
+            from_col=0,
+            to_row=0,
+            to_col=1,
+            timestep=1,
+        ),
+    )
+
+    path = find_path(
+        grid_map=grid_map,
+        agent=agent,
+        max_timestep=1,
+        constraints=constraints,
+    )
+
+    assert path is None
+
+
+def test_reverse_edge_is_not_blocked_by_directed_constraint() -> None:
+    grid_map = build_grid_map([[0, 0]])
+    agent = _agent(agent_id=0, start_row=0, start_col=1, goal_row=0, goal_col=0)
+    constraints = (
+        EdgeConstraint(
+            agent_id=0,
+            from_row=0,
+            from_col=0,
+            to_row=0,
+            to_col=1,
+            timestep=1,
+        ),
+    )
+
+    path = find_path(
+        grid_map=grid_map,
+        agent=agent,
+        max_timestep=5,
+        constraints=constraints,
+    )
+
+    assert path is not None
+    assert path.states == (
+        TimedState(row=0, col=1, timestep=0),
+        TimedState(row=0, col=0, timestep=1),
+    )
+
+
+def test_solver_can_wait_to_avoid_constrained_edge() -> None:
+    grid_map = build_grid_map([[0, 0]])
+    agent = _agent(agent_id=0, start_row=0, start_col=0, goal_row=0, goal_col=1)
+    constraints = (
+        EdgeConstraint(
+            agent_id=0,
+            from_row=0,
+            from_col=0,
+            to_row=0,
+            to_col=1,
+            timestep=1,
+        ),
+    )
+
+    path = find_path(
+        grid_map=grid_map,
+        agent=agent,
+        max_timestep=5,
+        constraints=constraints,
+    )
+
+    assert path is not None
+    assert path.states == (
+        TimedState(row=0, col=0, timestep=0),
+        TimedState(row=0, col=0, timestep=1),
+        TimedState(row=0, col=1, timestep=2),
+    )
+    _assert_path_respects_constraints(path, agent_id=0, constraints=constraints)
+
+
+def test_identical_edge_at_different_timestep_is_allowed() -> None:
+    grid_map = build_grid_map([[0, 0]])
+    agent = _agent(agent_id=0, start_row=0, start_col=0, goal_row=0, goal_col=1)
+    constraints = (
+        EdgeConstraint(
+            agent_id=0,
+            from_row=0,
+            from_col=0,
+            to_row=0,
+            to_col=1,
+            timestep=2,
+        ),
+    )
+
+    path = find_path(
+        grid_map=grid_map,
+        agent=agent,
+        max_timestep=5,
+        constraints=constraints,
+    )
+
+    assert path is not None
+    assert path.states == (
+        TimedState(row=0, col=0, timestep=0),
+        TimedState(row=0, col=1, timestep=1),
+    )
+
+
+def test_future_goal_vertex_constraint_prevents_premature_goal_acceptance() -> None:
+    grid_map = build_grid_map([[0, 0]])
+    agent = _agent(agent_id=0, start_row=0, start_col=0, goal_row=0, goal_col=1)
+    constraints = (
+        VertexConstraint(agent_id=0, row=0, col=1, timestep=2),
+    )
+
+    path = find_path(
+        grid_map=grid_map,
+        agent=agent,
+        max_timestep=5,
+        constraints=constraints,
+    )
+
+    assert path is not None
+    assert path.states[-1].timestep >= 3
+    assert path.states[-1] == TimedState(row=0, col=1, timestep=path.states[-1].timestep)
+    _assert_path_respects_constraints(path, agent_id=0, constraints=constraints)
+
+
+def test_future_constraint_on_different_cell_does_not_delay_goal() -> None:
+    grid_map = build_grid_map([[0, 0, 0]])
+    agent = _agent(agent_id=0, start_row=0, start_col=0, goal_row=0, goal_col=2)
+    constraints = (
+        VertexConstraint(agent_id=0, row=0, col=1, timestep=4),
+    )
+
+    path = find_path(
+        grid_map=grid_map,
+        agent=agent,
+        max_timestep=5,
+        constraints=constraints,
+    )
+
+    assert path is not None
+    assert path.states == (
+        TimedState(row=0, col=0, timestep=0),
+        TimedState(row=0, col=1, timestep=1),
+        TimedState(row=0, col=2, timestep=2),
+    )
+
+
+def test_future_goal_constraint_for_other_agent_does_not_delay_goal() -> None:
+    grid_map = build_grid_map([[0, 0]])
+    agent = _agent(agent_id=0, start_row=0, start_col=0, goal_row=0, goal_col=1)
+    constraints = (
+        VertexConstraint(agent_id=1, row=0, col=1, timestep=2),
+    )
+
+    path = find_path(
+        grid_map=grid_map,
+        agent=agent,
+        max_timestep=5,
+        constraints=constraints,
+    )
+
+    assert path is not None
+    assert path.states == (
+        TimedState(row=0, col=0, timestep=0),
+        TimedState(row=0, col=1, timestep=1),
+    )
+
+
+def test_multiple_vertex_constraints_are_respected() -> None:
+    grid_map = build_grid_map([[0, 0, 0, 0]])
+    agent = _agent(agent_id=0, start_row=0, start_col=0, goal_row=0, goal_col=3)
+    constraints = (
+        VertexConstraint(agent_id=0, row=0, col=1, timestep=1),
+        VertexConstraint(agent_id=0, row=0, col=2, timestep=2),
+    )
+
+    path = find_path(
+        grid_map=grid_map,
+        agent=agent,
+        max_timestep=8,
+        constraints=constraints,
+    )
+
+    assert path is not None
+    _assert_path_respects_constraints(path, agent_id=0, constraints=constraints)
+
+
+def test_vertex_and_edge_constraints_can_coexist() -> None:
+    grid_map = build_grid_map([[0, 0, 0]])
+    agent = _agent(agent_id=0, start_row=0, start_col=0, goal_row=0, goal_col=2)
+    constraints = (
+        EdgeConstraint(
+            agent_id=0,
+            from_row=0,
+            from_col=0,
+            to_row=0,
+            to_col=1,
+            timestep=1,
+        ),
+        VertexConstraint(agent_id=0, row=0, col=2, timestep=2),
+    )
+
+    path = find_path(
+        grid_map=grid_map,
+        agent=agent,
+        max_timestep=8,
+        constraints=constraints,
+    )
+
+    assert path is not None
+    _assert_path_respects_constraints(path, agent_id=0, constraints=constraints)
+
+
+def test_repeated_equal_constraints_do_not_break_search() -> None:
+    grid_map = build_grid_map([[0, 0]])
+    agent = _agent(agent_id=0, start_row=0, start_col=0, goal_row=0, goal_col=1)
+    constraint = EdgeConstraint(
+        agent_id=0,
+        from_row=0,
+        from_col=0,
+        to_row=0,
+        to_col=1,
+        timestep=1,
+    )
+
+    path = find_path(
+        grid_map=grid_map,
+        agent=agent,
+        max_timestep=5,
+        constraints=(constraint, constraint),
+    )
+
+    assert path is not None
+    assert path.states == (
+        TimedState(row=0, col=0, timestep=0),
+        TimedState(row=0, col=0, timestep=1),
+        TimedState(row=0, col=1, timestep=2),
+    )
