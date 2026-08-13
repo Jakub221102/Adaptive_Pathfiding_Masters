@@ -1,3 +1,4 @@
+from pathfinding.src.algorithms.mapf.conflicts import detect_conflicts
 from pathfinding.src.algorithms.mapf.models import (
     AgentPath,
     Constraint,
@@ -24,4 +25,5 @@ __all__ = [
     "TimedState",
     "VertexConflict",
     "VertexConstraint",
+    "detect_conflicts",
 ]
