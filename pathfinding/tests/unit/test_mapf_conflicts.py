@@ -222,6 +222,31 @@ def test_multiple_conflicts_are_returned_in_timestep_first_order() -> None:
     assert timesteps == sorted(timesteps)
 
 
+def test_later_pair_conflict_does_not_precede_earlier_timestep_conflict() -> None:
+    path_a = _path(1, [(0, 0, 0), (0, 1, 1), (0, 2, 2), (1, 1, 3), (1, 1, 4), (1, 1, 5)])
+    path_b = _path(2, [(2, 1, 0), (2, 1, 1), (2, 1, 2), (2, 1, 3), (2, 1, 4), (1, 1, 5)])
+    path_c = _path(3, [(0, 3, 0), (0, 2, 1), (0, 2, 2)])
+
+    conflicts = detect_conflicts((path_a, path_b, path_c))
+
+    assert conflicts[0] == VertexConflict(agent1_id=1, agent2_id=3, row=0, col=2, timestep=2)
+    assert conflicts[1] == VertexConflict(agent1_id=1, agent2_id=2, row=1, col=1, timestep=5)
+
+
+def test_same_timestep_conflicts_follow_input_pair_order() -> None:
+    path_a = _path(1, [(0, 0, 0), (1, 1, 1), (2, 2, 2), (5, 5, 3)])
+    path_b = _path(2, [(0, 1, 0), (1, 2, 1), (2, 3, 2), (5, 5, 3)])
+    path_c = _path(3, [(0, 2, 0), (1, 3, 1), (2, 4, 2), (5, 5, 3)])
+
+    conflicts = detect_conflicts((path_a, path_b, path_c))
+
+    assert conflicts == (
+        VertexConflict(agent1_id=1, agent2_id=2, row=5, col=5, timestep=3),
+        VertexConflict(agent1_id=1, agent2_id=3, row=5, col=5, timestep=3),
+        VertexConflict(agent1_id=2, agent2_id=3, row=5, col=5, timestep=3),
+    )
+
+
 def test_agent_pair_orientation_follows_input_path_order() -> None:
     path_first = _path(2, [(0, 0, 0), (0, 1, 1)])
     path_second = _path(7, [(0, 1, 0), (0, 0, 1)])

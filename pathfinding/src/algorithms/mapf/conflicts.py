@@ -37,14 +37,14 @@ def detect_conflicts(paths: Sequence[AgentPath]) -> tuple[Conflict, ...]:
     horizon = max(path.states[-1].timestep for path in path_list)
     conflicts: list[Conflict] = []
 
-    for first_index in range(len(path_list)):
-        for second_index in range(first_index + 1, len(path_list)):
-            first_path = path_list[first_index]
-            second_path = path_list[second_index]
-            agent1_id = first_path.agent_id
-            agent2_id = second_path.agent_id
+    for timestep in range(horizon + 1):
+        for first_index in range(len(path_list)):
+            for second_index in range(first_index + 1, len(path_list)):
+                first_path = path_list[first_index]
+                second_path = path_list[second_index]
+                agent1_id = first_path.agent_id
+                agent2_id = second_path.agent_id
 
-            for timestep in range(horizon + 1):
                 first_position = _position_at(first_path, timestep)
                 second_position = _position_at(second_path, timestep)
 
