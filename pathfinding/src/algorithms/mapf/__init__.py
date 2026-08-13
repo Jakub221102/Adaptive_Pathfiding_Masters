@@ -12,6 +12,7 @@ from pathfinding.src.algorithms.mapf.models import (
     VertexConflict,
     VertexConstraint,
 )
+from pathfinding.src.algorithms.mapf.reservations import build_reservation_constraints
 from pathfinding.src.algorithms.mapf.space_time_astar import find_path
 
 __all__ = [
@@ -26,6 +27,7 @@ __all__ = [
     "TimedState",
     "VertexConflict",
     "VertexConstraint",
+    "build_reservation_constraints",
     "detect_conflicts",
     "find_path",
 ]
