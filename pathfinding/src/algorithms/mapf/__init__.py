@@ -1,3 +1,4 @@
+from pathfinding.src.algorithms.mapf.cbs_splitting import split_conflict
 from pathfinding.src.algorithms.mapf.conflicts import detect_conflicts
 from pathfinding.src.algorithms.mapf.models import (
     AgentPath,
@@ -31,6 +32,7 @@ __all__ = [
     "VertexConstraint",
     "build_reservation_constraints",
     "detect_conflicts",
+    "split_conflict",
     "find_path",
     "makespan",
     "plan_prioritized",
