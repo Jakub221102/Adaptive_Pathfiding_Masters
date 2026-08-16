@@ -4,6 +4,7 @@ import heapq
 from collections import Counter
 from dataclasses import dataclass
 from itertools import count
+from typing import Literal
 
 from pathfinding.src.algorithms.mapf.cbs_splitting import split_conflict
 from pathfinding.src.algorithms.mapf.conflicts import detect_conflicts
@@ -18,6 +19,8 @@ from pathfinding.src.algorithms.mapf.models import (
 )
 from pathfinding.src.algorithms.mapf.space_time_astar import find_path
 from pathfinding.src.core.models import GridMap
+
+ConflictSelectionMode = Literal["basic", "cardinal_first"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,6 +43,8 @@ class CBSStats:
     duplicate_path_signatures: int
     generated_cost_distribution: tuple[tuple[int, int], ...]
     expanded_cost_distribution: tuple[tuple[int, int], ...]
+    classified_conflicts: int
+    classification_low_level_searches: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,6 +79,8 @@ class _CBSRunTracker:
     generated_ct_nodes: int = 0
     low_level_replans: int = 0
     max_open_size: int = 0
+    classified_conflicts: int = 0
+    classification_low_level_searches: int = 0
     _seen_constraint_signatures: set[frozenset[Constraint]] | None = None
     _seen_path_signatures: set[tuple[tuple[int, tuple[tuple[int, int, int], ...]], ...]] | None = None
     duplicate_constraint_signatures: int = 0
@@ -110,6 +117,10 @@ class _CBSRunTracker:
     def record_expansion(self, node: CBSNode) -> None:
         self.expanded_cost_counts[node.cost] += 1
 
+    def record_classification(self, classified_conflicts: int) -> None:
+        self.classified_conflicts += classified_conflicts
+        self.classification_low_level_searches += 2 * classified_conflicts
+
     def to_stats(self) -> CBSStats:
         return CBSStats(
             expanded_ct_nodes=self.expanded_ct_nodes,
@@ -122,6 +133,8 @@ class _CBSRunTracker:
             duplicate_path_signatures=self.duplicate_path_signatures,
             generated_cost_distribution=_cost_distribution(self.generated_cost_counts),
             expanded_cost_distribution=_cost_distribution(self.expanded_cost_counts),
+            classified_conflicts=self.classified_conflicts,
+            classification_low_level_searches=self.classification_low_level_searches,
         )
 
 
@@ -206,19 +219,16 @@ def build_cbs_root(
     )
 
 
-def expand_cbs_node(
+def expand_cbs_node_for_conflict(
     grid_map: GridMap,
     scenario: MAPFScenario,
     node: CBSNode,
+    conflict: Conflict,
     max_timestep: int,
 ) -> tuple[CBSNode, ...]:
     if max_timestep < 0:
         raise ValueError("max_timestep must be non-negative")
 
-    if not node.conflicts:
-        return ()
-
-    conflict = node.conflicts[0]
     branch_constraints = split_conflict(conflict)
 
     children: list[CBSNode] = []
@@ -236,6 +246,24 @@ def expand_cbs_node(
     return tuple(children)
 
 
+def expand_cbs_node(
+    grid_map: GridMap,
+    scenario: MAPFScenario,
+    node: CBSNode,
+    max_timestep: int,
+) -> tuple[CBSNode, ...]:
+    if not node.conflicts:
+        return ()
+
+    return expand_cbs_node_for_conflict(
+        grid_map=grid_map,
+        scenario=scenario,
+        node=node,
+        conflict=node.conflicts[0],
+        max_timestep=max_timestep,
+    )
+
+
 def _empty_stats() -> CBSStats:
     return CBSStats(
         expanded_ct_nodes=0,
@@ -248,6 +276,45 @@ def _empty_stats() -> CBSStats:
         duplicate_path_signatures=0,
         generated_cost_distribution=(),
         expanded_cost_distribution=(),
+        classified_conflicts=0,
+        classification_low_level_searches=0,
+    )
+
+
+def _expand_node(
+    grid_map: GridMap,
+    scenario: MAPFScenario,
+    node: CBSNode,
+    max_timestep: int,
+    conflict_selection_mode: ConflictSelectionMode,
+    tracker: _CBSRunTracker,
+) -> tuple[CBSNode, ...]:
+    if conflict_selection_mode == "basic":
+        return expand_cbs_node(
+            grid_map=grid_map,
+            scenario=scenario,
+            node=node,
+            max_timestep=max_timestep,
+        )
+
+    from pathfinding.src.algorithms.mapf.cbs_conflict_selection import (
+        select_conflict_cardinal_first,
+    )
+
+    selection = select_conflict_cardinal_first(
+        grid_map=grid_map,
+        scenario=scenario,
+        node=node,
+        max_timestep=max_timestep,
+    )
+    assert selection is not None
+    tracker.record_classification(selection.classified_conflicts)
+    return expand_cbs_node_for_conflict(
+        grid_map=grid_map,
+        scenario=scenario,
+        node=node,
+        conflict=selection.conflict,
+        max_timestep=max_timestep,
     )
 
 
@@ -257,6 +324,7 @@ def _solve_cbs_internal(
     max_timestep: int,
     *,
     max_expanded_nodes: int | None,
+    conflict_selection_mode: ConflictSelectionMode,
 ) -> CBSRunResult:
     if max_timestep < 0:
         raise ValueError("max_timestep must be non-negative")
@@ -309,11 +377,13 @@ def _solve_cbs_internal(
         tracker.low_level_replans += 2
         tracker.record_expansion(node)
 
-        children = expand_cbs_node(
+        children = _expand_node(
             grid_map=grid_map,
             scenario=scenario,
             node=node,
             max_timestep=max_timestep,
+            conflict_selection_mode=conflict_selection_mode,
+            tracker=tracker,
         )
         for child in children:
             tracker.generated_ct_nodes += 1
@@ -342,6 +412,7 @@ def solve_cbs(
         scenario=scenario,
         max_timestep=max_timestep,
         max_expanded_nodes=None,
+        conflict_selection_mode="basic",
     )
     assert run.result is not None
     return run.result
@@ -359,4 +430,37 @@ def solve_cbs_with_stats(
         scenario=scenario,
         max_timestep=max_timestep,
         max_expanded_nodes=max_expanded_nodes,
+        conflict_selection_mode="basic",
+    )
+
+
+def solve_cbs_cardinal_first(
+    grid_map: GridMap,
+    scenario: MAPFScenario,
+    max_timestep: int,
+) -> MAPFResult:
+    run = _solve_cbs_internal(
+        grid_map=grid_map,
+        scenario=scenario,
+        max_timestep=max_timestep,
+        max_expanded_nodes=None,
+        conflict_selection_mode="cardinal_first",
+    )
+    assert run.result is not None
+    return run.result
+
+
+def solve_cbs_cardinal_first_with_stats(
+    grid_map: GridMap,
+    scenario: MAPFScenario,
+    max_timestep: int,
+    *,
+    max_expanded_nodes: int | None = None,
+) -> CBSRunResult:
+    return _solve_cbs_internal(
+        grid_map=grid_map,
+        scenario=scenario,
+        max_timestep=max_timestep,
+        max_expanded_nodes=max_expanded_nodes,
+        conflict_selection_mode="cardinal_first",
     )

@@ -87,6 +87,8 @@ def test_conflict_free_root_stats() -> None:
     assert run.stats.duplicate_path_signatures == 0
     assert run.stats.generated_cost_distribution == ((6, 1),)
     assert run.stats.expanded_cost_distribution == ()
+    assert run.stats.classified_conflicts == 0
+    assert run.stats.classification_low_level_searches == 0
 
 
 def test_root_failure_stats() -> None:
@@ -114,6 +116,8 @@ def test_root_failure_stats() -> None:
     assert run.stats.duplicate_path_signatures == 0
     assert run.stats.generated_cost_distribution == ()
     assert run.stats.expanded_cost_distribution == ()
+    assert run.stats.classified_conflicts == 0
+    assert run.stats.classification_low_level_searches == 0
 
 
 def test_single_expansion_stats_match_standard_splitting() -> None:
@@ -172,6 +176,8 @@ def test_expansion_limit_zero_on_conflicting_root() -> None:
     assert run.stats.max_open_size == 1
     assert run.stats.generated_cost_distribution == ((4, 1),)
     assert run.stats.expanded_cost_distribution == ()
+    assert run.stats.classified_conflicts == 0
+    assert run.stats.classification_low_level_searches == 0
 
 
 def test_expansion_limit_zero_on_conflict_free_root() -> None:
