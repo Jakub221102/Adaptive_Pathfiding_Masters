@@ -25,6 +25,35 @@ DEFAULT_MAX_TIMESTEP = 512
 DEFAULT_MAX_EXPANDED_NODES = 1000
 DEFAULT_MAP_PATH = _REPO_ROOT / "Data" / "bg512-map" / "AR0204SR.map"
 DEFAULT_SCEN_PATH = _REPO_ROOT / "Data" / "bg512-scen" / "AR0204SR.map.scen"
+_MAX_FULL_DISTRIBUTION_BUCKETS = 20
+
+
+def _duplicate_rate(duplicates: int, generated: int) -> str:
+    if generated == 0:
+        return "N/A"
+    return f"{duplicates / generated * 100:.1f}%"
+
+
+def _print_cost_distribution(
+    label: str,
+    distribution: tuple[tuple[int, int], ...],
+) -> None:
+    print(label)
+    if not distribution:
+        print("  (empty)")
+        return
+
+    if len(distribution) <= _MAX_FULL_DISTRIBUTION_BUCKETS:
+        for cost, count in distribution:
+            print(f"  {cost}: {count}")
+        return
+
+    print("  (showing lowest 10 and highest 10 buckets)")
+    for cost, count in distribution[:10]:
+        print(f"  {cost}: {count}")
+    print("  ...")
+    for cost, count in distribution[-10:]:
+        print(f"  {cost}: {count}")
 
 
 def parse_args() -> argparse.Namespace:
@@ -149,6 +178,37 @@ def main() -> None:
         print(f"  SoC: {sum_of_costs(solution.paths)}")
         print(f"  Makespan: {makespan(solution.paths)}")
         print(f"  Conflicts: {len(solution_conflicts)}")
+    print()
+
+    print("CT STRUCTURE ANALYSIS")
+    print("---------------------")
+    print(f"Generated CT nodes: {stats.generated_ct_nodes}")
+    print()
+    print("Constraint signatures:")
+    print(f"  Unique: {stats.unique_constraint_signatures}")
+    print(f"  Duplicate: {stats.duplicate_constraint_signatures}")
+    print(
+        "  Duplicate rate: "
+        f"{_duplicate_rate(stats.duplicate_constraint_signatures, stats.generated_ct_nodes)}"
+    )
+    print()
+    print("Path-set signatures:")
+    print(f"  Unique: {stats.unique_path_signatures}")
+    print(f"  Duplicate: {stats.duplicate_path_signatures}")
+    print(
+        "  Duplicate rate: "
+        f"{_duplicate_rate(stats.duplicate_path_signatures, stats.generated_ct_nodes)}"
+    )
+    print()
+    _print_cost_distribution(
+        "Generated-node SoC distribution:",
+        stats.generated_cost_distribution,
+    )
+    print()
+    _print_cost_distribution(
+        "Expanded-node SoC distribution:",
+        stats.expanded_cost_distribution,
+    )
 
 
 if __name__ == "__main__":

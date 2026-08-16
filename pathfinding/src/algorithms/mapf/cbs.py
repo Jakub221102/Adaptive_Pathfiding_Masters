@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import heapq
+from collections import Counter
 from dataclasses import dataclass
 from itertools import count
 
@@ -33,6 +34,12 @@ class CBSStats:
     generated_ct_nodes: int
     low_level_replans: int
     max_open_size: int
+    unique_constraint_signatures: int
+    duplicate_constraint_signatures: int
+    unique_path_signatures: int
+    duplicate_path_signatures: int
+    generated_cost_distribution: tuple[tuple[int, int], ...]
+    expanded_cost_distribution: tuple[tuple[int, int], ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,6 +47,82 @@ class CBSRunResult:
     result: MAPFResult | None
     stats: CBSStats
     termination_reason: str
+
+
+def _constraint_signature(constraints: tuple[Constraint, ...]) -> frozenset[Constraint]:
+    return frozenset(constraints)
+
+
+def _path_signature(path: AgentPath) -> tuple[int, tuple[tuple[int, int, int], ...]]:
+    return (
+        path.agent_id,
+        tuple((state.row, state.col, state.timestep) for state in path.states),
+    )
+
+
+def _path_set_signature(paths: tuple[AgentPath, ...]) -> tuple[tuple[int, tuple[tuple[int, int, int], ...]], ...]:
+    return tuple(_path_signature(path) for path in paths)
+
+
+def _cost_distribution(counter: Counter[int]) -> tuple[tuple[int, int], ...]:
+    return tuple(sorted(counter.items()))
+
+
+@dataclass
+class _CBSRunTracker:
+    expanded_ct_nodes: int = 0
+    generated_ct_nodes: int = 0
+    low_level_replans: int = 0
+    max_open_size: int = 0
+    _seen_constraint_signatures: set[frozenset[Constraint]] | None = None
+    _seen_path_signatures: set[tuple[tuple[int, tuple[tuple[int, int, int], ...]], ...]] | None = None
+    duplicate_constraint_signatures: int = 0
+    duplicate_path_signatures: int = 0
+    generated_cost_counts: Counter[int] | None = None
+    expanded_cost_counts: Counter[int] | None = None
+
+    def __post_init__(self) -> None:
+        if self._seen_constraint_signatures is None:
+            self._seen_constraint_signatures = set()
+        if self._seen_path_signatures is None:
+            self._seen_path_signatures = set()
+        if self.generated_cost_counts is None:
+            self.generated_cost_counts = Counter()
+        if self.expanded_cost_counts is None:
+            self.expanded_cost_counts = Counter()
+
+    def record_generated_node(self, node: CBSNode) -> None:
+        constraint_signature = _constraint_signature(node.constraints)
+        path_signature = _path_set_signature(node.paths)
+
+        if constraint_signature in self._seen_constraint_signatures:
+            self.duplicate_constraint_signatures += 1
+        else:
+            self._seen_constraint_signatures.add(constraint_signature)
+
+        if path_signature in self._seen_path_signatures:
+            self.duplicate_path_signatures += 1
+        else:
+            self._seen_path_signatures.add(path_signature)
+
+        self.generated_cost_counts[node.cost] += 1
+
+    def record_expansion(self, node: CBSNode) -> None:
+        self.expanded_cost_counts[node.cost] += 1
+
+    def to_stats(self) -> CBSStats:
+        return CBSStats(
+            expanded_ct_nodes=self.expanded_ct_nodes,
+            generated_ct_nodes=self.generated_ct_nodes,
+            low_level_replans=self.low_level_replans,
+            max_open_size=self.max_open_size,
+            unique_constraint_signatures=len(self._seen_constraint_signatures),
+            duplicate_constraint_signatures=self.duplicate_constraint_signatures,
+            unique_path_signatures=len(self._seen_path_signatures),
+            duplicate_path_signatures=self.duplicate_path_signatures,
+            generated_cost_distribution=_cost_distribution(self.generated_cost_counts),
+            expanded_cost_distribution=_cost_distribution(self.expanded_cost_counts),
+        )
 
 
 def _find_agent(scenario: MAPFScenario, agent_id: int) -> MAPFAgent:
@@ -159,6 +242,12 @@ def _empty_stats() -> CBSStats:
         generated_ct_nodes=0,
         low_level_replans=0,
         max_open_size=0,
+        unique_constraint_signatures=0,
+        duplicate_constraint_signatures=0,
+        unique_path_signatures=0,
+        duplicate_path_signatures=0,
+        generated_cost_distribution=(),
+        expanded_cost_distribution=(),
     )
 
 
@@ -186,10 +275,11 @@ def _solve_cbs_internal(
             termination_reason="failure",
         )
 
-    expanded_ct_nodes = 0
-    generated_ct_nodes = 1
-    low_level_replans = 0
-    max_open_size = 1
+    tracker = _CBSRunTracker(
+        generated_ct_nodes=1,
+        max_open_size=1,
+    )
+    tracker.record_generated_node(root)
 
     open_heap: list[tuple[int, int, CBSNode]] = []
     insertion_counter = count()
@@ -199,36 +289,25 @@ def _solve_cbs_internal(
         _, _, node = heapq.heappop(open_heap)
 
         if not node.conflicts:
-            stats = CBSStats(
-                expanded_ct_nodes=expanded_ct_nodes,
-                generated_ct_nodes=generated_ct_nodes,
-                low_level_replans=low_level_replans,
-                max_open_size=max_open_size,
-            )
             return CBSRunResult(
                 result=MAPFResult(success=True, paths=node.paths),
-                stats=stats,
+                stats=tracker.to_stats(),
                 termination_reason="success",
             )
 
         if (
             max_expanded_nodes is not None
-            and expanded_ct_nodes >= max_expanded_nodes
+            and tracker.expanded_ct_nodes >= max_expanded_nodes
         ):
-            stats = CBSStats(
-                expanded_ct_nodes=expanded_ct_nodes,
-                generated_ct_nodes=generated_ct_nodes,
-                low_level_replans=low_level_replans,
-                max_open_size=max_open_size,
-            )
             return CBSRunResult(
                 result=None,
-                stats=stats,
+                stats=tracker.to_stats(),
                 termination_reason="expansion_limit",
             )
 
-        expanded_ct_nodes += 1
-        low_level_replans += 2
+        tracker.expanded_ct_nodes += 1
+        tracker.low_level_replans += 2
+        tracker.record_expansion(node)
 
         children = expand_cbs_node(
             grid_map=grid_map,
@@ -237,23 +316,18 @@ def _solve_cbs_internal(
             max_timestep=max_timestep,
         )
         for child in children:
-            generated_ct_nodes += 1
+            tracker.generated_ct_nodes += 1
+            tracker.record_generated_node(child)
             heapq.heappush(
                 open_heap,
                 (child.cost, next(insertion_counter), child),
             )
-            if len(open_heap) > max_open_size:
-                max_open_size = len(open_heap)
+            if len(open_heap) > tracker.max_open_size:
+                tracker.max_open_size = len(open_heap)
 
-    stats = CBSStats(
-        expanded_ct_nodes=expanded_ct_nodes,
-        generated_ct_nodes=generated_ct_nodes,
-        low_level_replans=low_level_replans,
-        max_open_size=max_open_size,
-    )
     return CBSRunResult(
         result=MAPFResult(success=False, paths=()),
-        stats=stats,
+        stats=tracker.to_stats(),
         termination_reason="failure",
     )
 

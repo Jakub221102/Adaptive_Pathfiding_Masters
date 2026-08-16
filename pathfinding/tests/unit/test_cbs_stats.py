@@ -1,6 +1,6 @@
 import pytest
 
-from pathfinding.src.algorithms.mapf.cbs import CBSStats, solve_cbs, solve_cbs_with_stats
+from pathfinding.src.algorithms.mapf.cbs import solve_cbs, solve_cbs_with_stats
 from pathfinding.src.algorithms.mapf.conflicts import detect_conflicts
 from pathfinding.src.algorithms.mapf.models import MAPFAgent, MAPFResult, MAPFScenario
 from pathfinding.src.core.models import Position
@@ -77,12 +77,16 @@ def test_conflict_free_root_stats() -> None:
     )
 
     assert run.termination_reason == "success"
-    assert run.stats == CBSStats(
-        expanded_ct_nodes=0,
-        generated_ct_nodes=1,
-        low_level_replans=0,
-        max_open_size=1,
-    )
+    assert run.stats.expanded_ct_nodes == 0
+    assert run.stats.generated_ct_nodes == 1
+    assert run.stats.low_level_replans == 0
+    assert run.stats.max_open_size == 1
+    assert run.stats.unique_constraint_signatures == 1
+    assert run.stats.duplicate_constraint_signatures == 0
+    assert run.stats.unique_path_signatures == 1
+    assert run.stats.duplicate_path_signatures == 0
+    assert run.stats.generated_cost_distribution == ((6, 1),)
+    assert run.stats.expanded_cost_distribution == ()
 
 
 def test_root_failure_stats() -> None:
@@ -100,12 +104,16 @@ def test_root_failure_stats() -> None:
 
     assert run.result == MAPFResult(success=False, paths=())
     assert run.termination_reason == "failure"
-    assert run.stats == CBSStats(
-        expanded_ct_nodes=0,
-        generated_ct_nodes=0,
-        low_level_replans=0,
-        max_open_size=0,
-    )
+    assert run.stats.expanded_ct_nodes == 0
+    assert run.stats.generated_ct_nodes == 0
+    assert run.stats.low_level_replans == 0
+    assert run.stats.max_open_size == 0
+    assert run.stats.unique_constraint_signatures == 0
+    assert run.stats.duplicate_constraint_signatures == 0
+    assert run.stats.unique_path_signatures == 0
+    assert run.stats.duplicate_path_signatures == 0
+    assert run.stats.generated_cost_distribution == ()
+    assert run.stats.expanded_cost_distribution == ()
 
 
 def test_single_expansion_stats_match_standard_splitting() -> None:
@@ -158,12 +166,12 @@ def test_expansion_limit_zero_on_conflicting_root() -> None:
 
     assert run.result is None
     assert run.termination_reason == "expansion_limit"
-    assert run.stats == CBSStats(
-        expanded_ct_nodes=0,
-        generated_ct_nodes=1,
-        low_level_replans=0,
-        max_open_size=1,
-    )
+    assert run.stats.expanded_ct_nodes == 0
+    assert run.stats.generated_ct_nodes == 1
+    assert run.stats.low_level_replans == 0
+    assert run.stats.max_open_size == 1
+    assert run.stats.generated_cost_distribution == ((4, 1),)
+    assert run.stats.expanded_cost_distribution == ()
 
 
 def test_expansion_limit_zero_on_conflict_free_root() -> None:
