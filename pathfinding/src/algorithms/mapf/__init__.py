@@ -7,6 +7,10 @@ from pathfinding.src.algorithms.mapf.cbs import (
     solve_cbs,
     solve_cbs_with_stats,
 )
+from pathfinding.src.algorithms.mapf.cbs_conflict_classification import (
+    ConflictCardinality,
+    classify_conflict,
+)
 from pathfinding.src.algorithms.mapf.cbs_splitting import split_conflict
 from pathfinding.src.algorithms.mapf.conflicts import detect_conflicts
 from pathfinding.src.algorithms.mapf.models import (
@@ -28,6 +32,7 @@ from pathfinding.src.algorithms.mapf.reservations import build_reservation_const
 from pathfinding.src.algorithms.mapf.space_time_astar import find_path
 
 __all__ = [
+    "ConflictCardinality",
     "CBSNode",
     "CBSRunResult",
     "CBSStats",
@@ -45,6 +50,7 @@ __all__ = [
     "build_cbs_root",
     "expand_cbs_node",
     "build_reservation_constraints",
+    "classify_conflict",
     "detect_conflicts",
     "split_conflict",
     "solve_cbs",
