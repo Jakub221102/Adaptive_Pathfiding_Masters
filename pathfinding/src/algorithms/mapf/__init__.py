@@ -1,4 +1,4 @@
-from pathfinding.src.algorithms.mapf.cbs import CBSNode, build_cbs_root, expand_cbs_node
+from pathfinding.src.algorithms.mapf.cbs import CBSNode, build_cbs_root, expand_cbs_node, solve_cbs
 from pathfinding.src.algorithms.mapf.cbs_splitting import split_conflict
 from pathfinding.src.algorithms.mapf.conflicts import detect_conflicts
 from pathfinding.src.algorithms.mapf.models import (
@@ -37,6 +37,7 @@ __all__ = [
     "build_reservation_constraints",
     "detect_conflicts",
     "split_conflict",
+    "solve_cbs",
     "find_path",
     "makespan",
     "plan_prioritized",

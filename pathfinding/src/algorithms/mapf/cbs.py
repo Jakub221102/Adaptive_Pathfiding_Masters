@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import heapq
 from dataclasses import dataclass
+from itertools import count
 
 from pathfinding.src.algorithms.mapf.cbs_splitting import split_conflict
 from pathfinding.src.algorithms.mapf.conflicts import detect_conflicts
@@ -10,6 +12,7 @@ from pathfinding.src.algorithms.mapf.models import (
     Conflict,
     Constraint,
     MAPFAgent,
+    MAPFResult,
     MAPFScenario,
 )
 from pathfinding.src.algorithms.mapf.space_time_astar import find_path
@@ -133,3 +136,44 @@ def expand_cbs_node(
             children.append(child)
 
     return tuple(children)
+
+
+def solve_cbs(
+    grid_map: GridMap,
+    scenario: MAPFScenario,
+    max_timestep: int,
+) -> MAPFResult:
+    if max_timestep < 0:
+        raise ValueError("max_timestep must be non-negative")
+
+    root = build_cbs_root(
+        grid_map=grid_map,
+        scenario=scenario,
+        max_timestep=max_timestep,
+    )
+    if root is None:
+        return MAPFResult(success=False, paths=())
+
+    open_heap: list[tuple[int, int, CBSNode]] = []
+    insertion_counter = count()
+    heapq.heappush(open_heap, (root.cost, next(insertion_counter), root))
+
+    while open_heap:
+        _, _, node = heapq.heappop(open_heap)
+
+        if not node.conflicts:
+            return MAPFResult(success=True, paths=node.paths)
+
+        children = expand_cbs_node(
+            grid_map=grid_map,
+            scenario=scenario,
+            node=node,
+            max_timestep=max_timestep,
+        )
+        for child in children:
+            heapq.heappush(
+                open_heap,
+                (child.cost, next(insertion_counter), child),
+            )
+
+    return MAPFResult(success=False, paths=())
