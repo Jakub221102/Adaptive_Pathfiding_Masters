@@ -27,6 +27,21 @@ class CBSNode:
     conflicts: tuple[Conflict, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class CBSStats:
+    expanded_ct_nodes: int
+    generated_ct_nodes: int
+    low_level_replans: int
+    max_open_size: int
+
+
+@dataclass(frozen=True, slots=True)
+class CBSRunResult:
+    result: MAPFResult | None
+    stats: CBSStats
+    termination_reason: str
+
+
 def _find_agent(scenario: MAPFScenario, agent_id: int) -> MAPFAgent:
     for agent in scenario.agents:
         if agent.agent_id == agent_id:
@@ -138,13 +153,26 @@ def expand_cbs_node(
     return tuple(children)
 
 
-def solve_cbs(
+def _empty_stats() -> CBSStats:
+    return CBSStats(
+        expanded_ct_nodes=0,
+        generated_ct_nodes=0,
+        low_level_replans=0,
+        max_open_size=0,
+    )
+
+
+def _solve_cbs_internal(
     grid_map: GridMap,
     scenario: MAPFScenario,
     max_timestep: int,
-) -> MAPFResult:
+    *,
+    max_expanded_nodes: int | None,
+) -> CBSRunResult:
     if max_timestep < 0:
         raise ValueError("max_timestep must be non-negative")
+    if max_expanded_nodes is not None and max_expanded_nodes < 0:
+        raise ValueError("max_expanded_nodes must be non-negative")
 
     root = build_cbs_root(
         grid_map=grid_map,
@@ -152,7 +180,16 @@ def solve_cbs(
         max_timestep=max_timestep,
     )
     if root is None:
-        return MAPFResult(success=False, paths=())
+        return CBSRunResult(
+            result=MAPFResult(success=False, paths=()),
+            stats=_empty_stats(),
+            termination_reason="failure",
+        )
+
+    expanded_ct_nodes = 0
+    generated_ct_nodes = 1
+    low_level_replans = 0
+    max_open_size = 1
 
     open_heap: list[tuple[int, int, CBSNode]] = []
     insertion_counter = count()
@@ -162,7 +199,36 @@ def solve_cbs(
         _, _, node = heapq.heappop(open_heap)
 
         if not node.conflicts:
-            return MAPFResult(success=True, paths=node.paths)
+            stats = CBSStats(
+                expanded_ct_nodes=expanded_ct_nodes,
+                generated_ct_nodes=generated_ct_nodes,
+                low_level_replans=low_level_replans,
+                max_open_size=max_open_size,
+            )
+            return CBSRunResult(
+                result=MAPFResult(success=True, paths=node.paths),
+                stats=stats,
+                termination_reason="success",
+            )
+
+        if (
+            max_expanded_nodes is not None
+            and expanded_ct_nodes >= max_expanded_nodes
+        ):
+            stats = CBSStats(
+                expanded_ct_nodes=expanded_ct_nodes,
+                generated_ct_nodes=generated_ct_nodes,
+                low_level_replans=low_level_replans,
+                max_open_size=max_open_size,
+            )
+            return CBSRunResult(
+                result=None,
+                stats=stats,
+                termination_reason="expansion_limit",
+            )
+
+        expanded_ct_nodes += 1
+        low_level_replans += 2
 
         children = expand_cbs_node(
             grid_map=grid_map,
@@ -171,9 +237,52 @@ def solve_cbs(
             max_timestep=max_timestep,
         )
         for child in children:
+            generated_ct_nodes += 1
             heapq.heappush(
                 open_heap,
                 (child.cost, next(insertion_counter), child),
             )
+            if len(open_heap) > max_open_size:
+                max_open_size = len(open_heap)
 
-    return MAPFResult(success=False, paths=())
+    stats = CBSStats(
+        expanded_ct_nodes=expanded_ct_nodes,
+        generated_ct_nodes=generated_ct_nodes,
+        low_level_replans=low_level_replans,
+        max_open_size=max_open_size,
+    )
+    return CBSRunResult(
+        result=MAPFResult(success=False, paths=()),
+        stats=stats,
+        termination_reason="failure",
+    )
+
+
+def solve_cbs(
+    grid_map: GridMap,
+    scenario: MAPFScenario,
+    max_timestep: int,
+) -> MAPFResult:
+    run = _solve_cbs_internal(
+        grid_map=grid_map,
+        scenario=scenario,
+        max_timestep=max_timestep,
+        max_expanded_nodes=None,
+    )
+    assert run.result is not None
+    return run.result
+
+
+def solve_cbs_with_stats(
+    grid_map: GridMap,
+    scenario: MAPFScenario,
+    max_timestep: int,
+    *,
+    max_expanded_nodes: int | None = None,
+) -> CBSRunResult:
+    return _solve_cbs_internal(
+        grid_map=grid_map,
+        scenario=scenario,
+        max_timestep=max_timestep,
+        max_expanded_nodes=max_expanded_nodes,
+    )

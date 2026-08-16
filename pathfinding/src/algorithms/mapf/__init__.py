@@ -1,4 +1,12 @@
-from pathfinding.src.algorithms.mapf.cbs import CBSNode, build_cbs_root, expand_cbs_node, solve_cbs
+from pathfinding.src.algorithms.mapf.cbs import (
+    CBSNode,
+    CBSRunResult,
+    CBSStats,
+    build_cbs_root,
+    expand_cbs_node,
+    solve_cbs,
+    solve_cbs_with_stats,
+)
 from pathfinding.src.algorithms.mapf.cbs_splitting import split_conflict
 from pathfinding.src.algorithms.mapf.conflicts import detect_conflicts
 from pathfinding.src.algorithms.mapf.models import (
@@ -21,6 +29,8 @@ from pathfinding.src.algorithms.mapf.space_time_astar import find_path
 
 __all__ = [
     "CBSNode",
+    "CBSRunResult",
+    "CBSStats",
     "AgentPath",
     "Constraint",
     "Conflict",
@@ -38,6 +48,7 @@ __all__ = [
     "detect_conflicts",
     "split_conflict",
     "solve_cbs",
+    "solve_cbs_with_stats",
     "find_path",
     "makespan",
     "plan_prioritized",
