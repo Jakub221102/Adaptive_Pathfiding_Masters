@@ -1,3 +1,4 @@
+from pathfinding.src.algorithms.mapf.cbs import CBSNode, build_cbs_root
 from pathfinding.src.algorithms.mapf.cbs_splitting import split_conflict
 from pathfinding.src.algorithms.mapf.conflicts import detect_conflicts
 from pathfinding.src.algorithms.mapf.models import (
@@ -19,6 +20,7 @@ from pathfinding.src.algorithms.mapf.reservations import build_reservation_const
 from pathfinding.src.algorithms.mapf.space_time_astar import find_path
 
 __all__ = [
+    "CBSNode",
     "AgentPath",
     "Constraint",
     "Conflict",
@@ -30,6 +32,7 @@ __all__ = [
     "TimedState",
     "VertexConflict",
     "VertexConstraint",
+    "build_cbs_root",
     "build_reservation_constraints",
     "detect_conflicts",
     "split_conflict",
