@@ -11,8 +11,13 @@ from pathfinding.src.algorithms.mapf.metrics import makespan, sum_of_costs
 from pathfinding.src.algorithms.mapf.models import (
     AgentPath,
     EdgeConflict,
+    MAPFAgent,
     TimedState,
     VertexConflict,
+)
+from pathfinding.src.experiments.mapf_independent_static_path import (
+    evaluate_candidate_with_independent_paths,
+    find_independent_static_path,
 )
 from pathfinding.src.algorithms.mapf.space_time_astar import find_path
 from pathfinding.src.core.models import GridMap, Position, Scenario
@@ -596,16 +601,16 @@ def test_precompute_plans_each_source_scenario_once() -> None:
     grid_map, scenarios = _build_crossing_scenario_pool()
     indices = (2, 2, 5)
     plan_calls = 0
-    original_find_path = find_path
+    original_static_path = find_independent_static_path
 
-    def counting_find_path(*args, **kwargs):
+    def counting_static_path(*args, **kwargs):
         nonlocal plan_calls
         plan_calls += 1
-        return original_find_path(*args, **kwargs)
+        return original_static_path(*args, **kwargs)
 
-    import pathfinding.src.experiments.mapf_benchmark_instances as benchmark_module
+    import pathfinding.src.experiments.mapf_independent_static_path as static_module
 
-    benchmark_module.find_path = counting_find_path
+    static_module.find_independent_static_path = counting_static_path
     try:
         result = precompute_independent_paths(
             grid_map=grid_map,
@@ -614,7 +619,7 @@ def test_precompute_plans_each_source_scenario_once() -> None:
             max_timestep=64,
         )
     finally:
-        benchmark_module.find_path = original_find_path
+        static_module.find_independent_static_path = original_static_path
 
     assert [path.scenario_index for path in result.paths] == [2, 2, 5]
     assert result.paths[0].states == result.paths[1].states
@@ -639,7 +644,7 @@ def test_precomputed_states_reconstruct_with_different_agent_ids() -> None:
     assert path_b.agent_id == 7
 
 
-def test_precomputed_candidate_evaluation_matches_direct_evaluation() -> None:
+def test_precomputed_candidate_evaluation_matches_static_direct_evaluation() -> None:
     grid_map, scenarios = _build_crossing_scenario_pool()
     scenario_indices = (1, 4, 8)
 
@@ -651,12 +656,25 @@ def test_precomputed_candidate_evaluation_matches_direct_evaluation() -> None:
     )
     lookup = build_precomputed_path_lookup(precomputed.paths)
 
-    direct = evaluate_benchmark_candidate(
+    static_paths = []
+    for agent_id, scenario_index in enumerate(scenario_indices):
+        scenario = scenarios[scenario_index]
+        path = find_independent_static_path(
+            grid_map,
+            MAPFAgent(
+                agent_id=agent_id,
+                start=scenario.start,
+                goal=scenario.goal,
+            ),
+        )
+        assert path is not None
+        static_paths.append(path)
+
+    direct = evaluate_candidate_with_independent_paths(
         grid_map=grid_map,
         scenarios=scenarios,
         scenario_indices=scenario_indices,
-        max_timestep=64,
-        precomputed_lookup=None,
+        independent_paths=static_paths,
     )
     cached = evaluate_benchmark_candidate(
         grid_map=grid_map,
@@ -750,7 +768,7 @@ def test_precompute_records_failed_scenario_indices() -> None:
     assert 999 in result.failed_scenario_indices
 
 
-def test_precomputed_generation_matches_legacy_when_all_eligible_are_feasible() -> None:
+def test_precomputed_generation_is_deterministic_with_static_precompute() -> None:
     grid_map, scenarios = _build_crossing_scenario_pool()
     config = {
         "agent_count": 3,
@@ -761,34 +779,21 @@ def test_precomputed_generation_matches_legacy_when_all_eligible_are_feasible() 
         "max_attempts": 5000,
     }
 
-    source_pool = prepare_benchmark_source_pool(
+    first = generate_benchmark_instances(
         grid_map=grid_map,
         scenarios=scenarios,
-        min_reference_length=config["min_reference_length"],
-        max_timestep=config["max_timestep"],
+        **config,
     )
-    assert source_pool.feasible_indices == source_pool.eligible_indices
-
-    precomputed = generate_benchmark_instances_from_precomputed(
-        grid_map=grid_map,
-        scenarios=scenarios,
-        source_pool=source_pool,
-        agent_count=config["agent_count"],
-        instances_per_level=config["instances_per_level"],
-        max_timestep=config["max_timestep"],
-        seed=config["seed"],
-        max_attempts=config["max_attempts"],
-    )
-    legacy = generate_benchmark_instances_legacy(
+    second = generate_benchmark_instances(
         grid_map=grid_map,
         scenarios=scenarios,
         **config,
     )
 
-    assert precomputed == legacy
+    assert first == second
 
 
-def test_sampling_performs_zero_find_path_calls_after_precompute() -> None:
+def test_sampling_performs_zero_pathfinding_calls_after_precompute() -> None:
     grid_map, scenarios = _build_crossing_scenario_pool()
     source_pool = prepare_benchmark_source_pool(
         grid_map=grid_map,
@@ -798,12 +803,20 @@ def test_sampling_performs_zero_find_path_calls_after_precompute() -> None:
     )
 
     import pathfinding.src.experiments.mapf_benchmark_instances as benchmark_module
+    import pathfinding.src.experiments.mapf_independent_static_path as static_module
 
     def raising_find_path(*args, **kwargs):
         raise AssertionError("find_path must not be called during candidate sampling")
 
+    def raising_static_path(*args, **kwargs):
+        raise AssertionError(
+            "find_independent_static_path must not be called during candidate sampling"
+        )
+
     original_find_path = benchmark_module.find_path
+    original_static_path = static_module.find_independent_static_path
     benchmark_module.find_path = raising_find_path
+    static_module.find_independent_static_path = raising_static_path
     try:
         result = generate_benchmark_instances_from_precomputed(
             grid_map=grid_map,
@@ -817,6 +830,7 @@ def test_sampling_performs_zero_find_path_calls_after_precompute() -> None:
         )
     finally:
         benchmark_module.find_path = original_find_path
+        static_module.find_independent_static_path = original_static_path
 
     assert len(result.instances) == 3
 
@@ -824,16 +838,16 @@ def test_sampling_performs_zero_find_path_calls_after_precompute() -> None:
 def test_full_pool_precomputed_once_per_generation_call() -> None:
     grid_map, scenarios = _build_crossing_scenario_pool()
     plan_calls = 0
-    original_find_path = find_path
+    original_static_path = find_independent_static_path
 
-    def counting_find_path(*args, **kwargs):
+    def counting_static_path(*args, **kwargs):
         nonlocal plan_calls
         plan_calls += 1
-        return original_find_path(*args, **kwargs)
+        return original_static_path(*args, **kwargs)
 
-    import pathfinding.src.experiments.mapf_benchmark_instances as benchmark_module
+    import pathfinding.src.experiments.mapf_independent_static_path as static_module
 
-    benchmark_module.find_path = counting_find_path
+    static_module.find_independent_static_path = counting_static_path
     try:
         source_pool = prepare_benchmark_source_pool(
             grid_map=grid_map,
@@ -855,7 +869,7 @@ def test_full_pool_precomputed_once_per_generation_call() -> None:
             source_pool=source_pool,
         )
     finally:
-        benchmark_module.find_path = original_find_path
+        static_module.find_independent_static_path = original_static_path
 
     assert plan_calls == 0
     assert precompute_calls == len(set(source_pool.eligible_indices))
@@ -947,4 +961,80 @@ def test_progress_callbacks_do_not_affect_generated_instances() -> None:
     )
 
     assert silent.instances == noisy.instances
+
+
+def test_precompute_horizon_includes_cost_equal_to_max_timestep() -> None:
+    grid_map = build_grid_map(
+        [[0, 0, 0, 0, 0] for _ in range(3)],
+        name="exact_horizon.map",
+    )
+    scenarios = [
+        _scenario(1, 0, 1, 4, optimal_length=25.0, width=5, height=3),
+    ]
+
+    result = precompute_independent_paths(
+        grid_map=grid_map,
+        scenarios=scenarios,
+        scenario_indices=(0,),
+        max_timestep=4,
+    )
+
+    assert len(result.paths) == 1
+    assert result.over_horizon_count == 0
+    assert len(result.paths[0].states) - 1 == 4
+
+
+def test_precompute_horizon_excludes_cost_above_max_timestep() -> None:
+    grid_map = build_grid_map(
+        [[0, 0, 0, 0, 0] for _ in range(3)],
+        name="over_horizon.map",
+    )
+    scenarios = [
+        _scenario(1, 0, 1, 4, optimal_length=25.0, width=5, height=3),
+    ]
+
+    result = precompute_independent_paths(
+        grid_map=grid_map,
+        scenarios=scenarios,
+        scenario_indices=(0,),
+        max_timestep=3,
+    )
+
+    assert result.paths == ()
+    assert 0 in result.failed_scenario_indices
+    assert result.over_horizon_count == 1
+    assert result.no_spatial_path_count == 0
+
+
+def test_production_precompute_does_not_call_space_time_astar() -> None:
+    grid_map, scenarios = _build_crossing_scenario_pool()
+
+    import pathfinding.src.experiments.mapf_benchmark_instances as benchmark_module
+
+    def raising_find_path(*args, **kwargs):
+        raise AssertionError(
+            "Space-Time A* must not be used for benchmark source precompute"
+        )
+
+    original_find_path = benchmark_module.find_path
+    benchmark_module.find_path = raising_find_path
+    try:
+        result = prepare_benchmark_source_pool(
+            grid_map=grid_map,
+            scenarios=scenarios,
+            min_reference_length=20.0,
+            max_timestep=64,
+        )
+        generate_benchmark_instances_from_precomputed(
+            grid_map=grid_map,
+            scenarios=scenarios,
+            agent_count=3,
+            instances_per_level=1,
+            max_timestep=64,
+            seed=3,
+            max_attempts=5000,
+            source_pool=result,
+        )
+    finally:
+        benchmark_module.find_path = original_find_path
 

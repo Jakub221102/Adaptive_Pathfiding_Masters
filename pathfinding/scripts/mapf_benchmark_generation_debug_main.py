@@ -1,4 +1,4 @@
-"""Local diagnostic runner for MAPF-5A.3 benchmark generation.
+"""Local diagnostic runner for MAPF-5A benchmark generation.
 
 Open in PyCharm and press Run. No command-line arguments required.
 Edit the DEBUG CONFIGURATION block below to change experiment settings.
@@ -20,14 +20,13 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from pathfinding.src.experiments import mapf_benchmark_instances as benchmark_module
+from pathfinding.src.experiments import mapf_independent_static_path as static_module
 from pathfinding.src.experiments.mapf_benchmark_instances import (
     MAPFBenchmarkInstance,
-    MAPFBenchmarkSourcePool,
     MAPFInteractionLevel,
-    build_precomputed_path_lookup,
-    eligible_scenario_indices,
+    StaticPrecomputeProgress,
     generate_benchmark_instances_from_precomputed,
-    precompute_independent_paths,
+    prepare_benchmark_source_pool,
 )
 from pathfinding.src.loaders.map_loader import load_moving_ai_map
 from pathfinding.src.loaders.scen_loader import load_moving_ai_scenarios
@@ -173,26 +172,24 @@ def run_debug_experiment() -> None:
     logger.info(f"  PRECOMPUTE_PROGRESS_EVERY: {PRECOMPUTE_PROGRESS_EVERY}")
     logger.info(f"  SAMPLING_PROGRESS_EVERY: {SAMPLING_PROGRESS_EVERY}")
     logger.info("")
+    logger.info("Using static 4-connected independent-path precomputation.")
+    logger.info("Space-Time A* is NOT used during benchmark source preparation.")
+    logger.info("")
 
     histogram = ConflictHistogram()
-    precompute_feasible = 0
-    precompute_failed = 0
     precompute_start = time.perf_counter()
     current_attempt = 0
     sampling_start = 0.0
     accepted_instances: list[MAPFBenchmarkInstance] = []
 
     original_find_path = benchmark_module.find_path
+    original_static_path = static_module.find_independent_static_path
     original_evaluate = benchmark_module._evaluate_candidate
 
-    def counting_find_path(*args, **kwargs):
-        nonlocal precompute_feasible, precompute_failed
-        result = original_find_path(*args, **kwargs)
-        if result is None:
-            precompute_failed += 1
-        else:
-            precompute_feasible += 1
-        return result
+    def guard_sta_find_path(*_args, **_kwargs):
+        raise AssertionError(
+            "Space-Time A* must not be used for benchmark source precompute"
+        )
 
     def tracking_evaluate(*args, **kwargs):
         eval_start = time.perf_counter()
@@ -218,80 +215,59 @@ def run_debug_experiment() -> None:
     scenarios = load_moving_ai_scenarios(SCEN)
     _log(logger, timer, f"Scenarios loaded: {len(scenarios)}")
 
-    # STEP 3 — Determine eligible source indices
-    _log(logger, timer, "STEP 3 — Determine eligible source indices")
-    eligible_indices = eligible_scenario_indices(
-        scenarios=scenarios,
-        grid_map=grid_map,
-        min_reference_length=MIN_REFERENCE_LENGTH,
-    )
-    logger.info(f"Total MovingAI scenarios: {len(scenarios)}")
-    logger.info(f"Min reference length: {MIN_REFERENCE_LENGTH:g}")
-    logger.info(f"Eligible source scenarios: {len(eligible_indices)}")
-    logger.info(f"Max timestep: {MAX_TIMESTEP}")
-    _log(logger, timer, "Eligible pool determined")
-
-    # STEP 4 — Precompute independent source paths
-    _log(logger, timer, "STEP 4 — Precompute independent source paths")
+    # STEP 3 — Determine eligible source indices and static precompute
+    _log(logger, timer, "STEP 3 — Static precompute benchmark source pool")
     precompute_start = time.perf_counter()
-    precompute_feasible = 0
-    precompute_failed = 0
 
-    def precompute_progress(completed: int, total: int) -> None:
+    def precompute_progress(progress: StaticPrecomputeProgress) -> None:
         elapsed = time.perf_counter() - precompute_start
-        logger.info(f"PRECOMPUTE {completed} / {total}")
+        logger.info(f"STATIC PRECOMPUTE {progress.completed} / {progress.total}")
         logger.info(f"  elapsed: {elapsed:.1f} s")
-        logger.info(f"  feasible: {precompute_feasible}")
-        logger.info(f"  failed: {precompute_failed}")
+        logger.info(f"  feasible: {progress.feasible}")
+        logger.info(f"  no spatial path: {progress.no_spatial_path}")
+        logger.info(f"  over horizon: {progress.over_horizon}")
 
-    benchmark_module.find_path = counting_find_path
+    benchmark_module.find_path = guard_sta_find_path
     try:
-        precompute_result = precompute_independent_paths(
+        source_pool = prepare_benchmark_source_pool(
             grid_map=grid_map,
             scenarios=scenarios,
-            scenario_indices=eligible_indices,
+            min_reference_length=MIN_REFERENCE_LENGTH,
             max_timestep=MAX_TIMESTEP,
-            progress_every=PRECOMPUTE_PROGRESS_EVERY,
-            progress_callback=precompute_progress,
+            precompute_progress_every=PRECOMPUTE_PROGRESS_EVERY,
+            precompute_progress_callback=precompute_progress,
         )
     finally:
         benchmark_module.find_path = original_find_path
 
+    precompute_result = source_pool.precompute_result
     precompute_elapsed = time.perf_counter() - precompute_start
     logger.info("")
-    logger.info("PRECOMPUTE COMPLETE")
-    logger.info(f"  eligible: {len(eligible_indices)}")
-    logger.info(f"  feasible: {len(precompute_result.paths)}")
-    logger.info(f"  failed: {len(precompute_result.failed_scenario_indices)}")
+    logger.info("STATIC PRECOMPUTE COMPLETE")
+    logger.info(f"  eligible MovingAI sources: {len(source_pool.eligible_indices)}")
+    logger.info(f"  static spatial paths found: {precompute_result.spatial_paths_found}")
+    logger.info(f"  within horizon: {len(source_pool.feasible_indices)}")
+    logger.info(f"  over horizon: {precompute_result.over_horizon_count}")
+    logger.info(f"  no spatial path: {precompute_result.no_spatial_path_count}")
+    logger.info(f"  feasible source pool: {len(source_pool.feasible_indices)}")
     logger.info(f"  elapsed: {precompute_elapsed:.1f} s")
-    if eligible_indices:
+    if source_pool.eligible_indices:
         logger.info(
-            f"  paths/sec: {len(eligible_indices) / precompute_elapsed:.1f}"
+            f"  paths/sec: {len(source_pool.eligible_indices) / precompute_elapsed:.1f}"
         )
-    _log(logger, timer, "Precompute finished")
+    _log(logger, timer, "Static precompute finished")
 
-    # STEP 5 — Build lookup
-    _log(logger, timer, "STEP 5 — Build lookup")
-    precomputed_lookup = build_precomputed_path_lookup(precompute_result.paths)
-    feasible_indices = tuple(
-        index for index in eligible_indices if index in precomputed_lookup
-    )
-    source_pool = MAPFBenchmarkSourcePool(
-        eligible_indices=eligible_indices,
-        precompute_result=precompute_result,
-        precomputed_lookup=precomputed_lookup,
-        feasible_indices=feasible_indices,
-    )
+    # STEP 4 — Lookup ready
     _log(
         logger,
         timer,
-        f"Lookup built for {len(precomputed_lookup)} feasible scenarios",
+        f"STEP 4 — Lookup built for {len(source_pool.precomputed_lookup)} scenarios",
     )
 
-    # STEP 6 — Generate benchmark candidates using lookup only
-    _log(logger, timer, "STEP 6 — Generate benchmark candidates using lookup only")
+    # STEP 5 — Generate benchmark candidates using lookup only
+    _log(logger, timer, "STEP 5 — Generate benchmark candidates using lookup only")
     logger.info("Starting lookup-only candidate sampling.")
-    logger.info("No Space-Time A* calls should occur during this phase.")
+    logger.info("No pathfinding calls should occur during this phase.")
     logger.info("")
 
     sampling_start = time.perf_counter()
@@ -338,7 +314,13 @@ def run_debug_experiment() -> None:
     def guard_find_path(*_args, **_kwargs):
         raise AssertionError("find_path must not be called during lookup-only sampling")
 
+    def guard_static_path(*_args, **_kwargs):
+        raise AssertionError(
+            "find_independent_static_path must not be called during lookup-only sampling"
+        )
+
     benchmark_module.find_path = guard_find_path
+    static_module.find_independent_static_path = guard_static_path
     benchmark_module._evaluate_candidate = tracking_evaluate
     generation_error: ValueError | None = None
     result = None
@@ -360,13 +342,14 @@ def run_debug_experiment() -> None:
         generation_error = error
     finally:
         benchmark_module.find_path = original_find_path
+        static_module.find_independent_static_path = original_static_path
         benchmark_module._evaluate_candidate = original_evaluate
 
     sampling_elapsed = time.perf_counter() - sampling_start
     total_elapsed = timer.elapsed()
 
-    # STEP 7 — Print final summary
-    _log(logger, timer, "STEP 7 — Print final summary")
+    # STEP 6 — Print final summary
+    _log(logger, timer, "STEP 6 — Print final summary")
     logger.info("")
 
     if generation_error is not None:

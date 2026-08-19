@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from pathfinding.src.algorithms.mapf.models import MAPFAgent, TimedState
+from pathfinding.src.algorithms.mapf.models import AgentPath, MAPFAgent, TimedState
 from pathfinding.src.algorithms.mapf.space_time_astar import find_path
 from pathfinding.src.core.models import GridMap, Position, Scenario
 from pathfinding.src.experiments.mapf_benchmark_instances import (
@@ -12,6 +12,9 @@ from pathfinding.src.experiments.mapf_independent_static_path import (
     evaluate_candidate_with_independent_paths,
     find_independent_static_path,
     independent_path_cost,
+    independent_path_excess_moves,
+    independent_path_fits_horizon,
+    merge_diagnostic_scenario_indices,
     spatial_trajectory,
 )
 from pathfinding.tests.helpers import build_grid_map
@@ -294,3 +297,49 @@ def test_candidate_interaction_equivalence_on_synthetic_pool() -> None:
     assert sta_evaluation.independent_soc == static_evaluation.independent_soc
     assert sta_evaluation.independent_makespan == static_evaluation.independent_makespan
     assert sta_evaluation.interaction_level == static_evaluation.interaction_level
+
+
+def test_independent_path_fits_horizon_zero_cost() -> None:
+    path = AgentPath(
+        agent_id=0,
+        states=(TimedState(row=0, col=0, timestep=0),),
+    )
+    assert independent_path_fits_horizon(path, max_timestep=0)
+    assert independent_path_excess_moves(path, max_timestep=0) == 0
+
+
+def test_independent_path_fits_horizon_exact_limit() -> None:
+    states = tuple(
+        TimedState(row=0, col=index, timestep=index) for index in range(513)
+    )
+    path = AgentPath(agent_id=0, states=states)
+    assert independent_path_cost(path) == 512
+    assert independent_path_fits_horizon(path, max_timestep=512)
+    assert independent_path_excess_moves(path, max_timestep=512) == 0
+
+
+def test_independent_path_exceeds_horizon_by_one() -> None:
+    states = tuple(
+        TimedState(row=0, col=index, timestep=index) for index in range(514)
+    )
+    path = AgentPath(agent_id=0, states=states)
+    assert independent_path_cost(path) == 513
+    assert not independent_path_fits_horizon(path, max_timestep=512)
+    assert independent_path_excess_moves(path, max_timestep=512) == 1
+
+
+def test_independent_path_fits_horizon_negative_max_timestep_raises() -> None:
+    path = AgentPath(
+        agent_id=0,
+        states=(TimedState(row=0, col=0, timestep=0),),
+    )
+    with pytest.raises(ValueError, match="max_timestep must be non-negative"):
+        independent_path_fits_horizon(path, max_timestep=-1)
+
+
+def test_merge_diagnostic_scenario_indices_deduplicates_special() -> None:
+    merged = merge_diagnostic_scenario_indices(
+        (50, 51, 1125, 60),
+        (1125, 999),
+    )
+    assert merged == (50, 51, 1125, 60, 999)

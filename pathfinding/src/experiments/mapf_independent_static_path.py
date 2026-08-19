@@ -136,6 +136,20 @@ def independent_path_cost(path: AgentPath | None) -> int | None:
     return len(path.states) - 1
 
 
+def independent_path_fits_horizon(path: AgentPath, max_timestep: int) -> bool:
+    if max_timestep < 0:
+        raise ValueError("max_timestep must be non-negative")
+    return independent_path_cost(path) <= max_timestep
+
+
+def independent_path_excess_moves(path: AgentPath, max_timestep: int) -> int:
+    if max_timestep < 0:
+        raise ValueError("max_timestep must be non-negative")
+    cost = independent_path_cost(path)
+    assert cost is not None
+    return max(0, cost - max_timestep)
+
+
 def spatial_trajectory(path: AgentPath) -> tuple[tuple[int, int], ...]:
     return tuple((state.row, state.col) for state in path.states)
 
@@ -164,6 +178,20 @@ def select_diagnostic_scenario_indices(
     middle_start = max(0, (len(eligible_indices) - middle_count) // 2)
     middle = eligible_indices[middle_start : middle_start + middle_count]
     return tuple(early + middle + late)
+
+
+def merge_diagnostic_scenario_indices(
+    base_indices: Sequence[int],
+    special_indices: Sequence[int],
+) -> tuple[int, ...]:
+    seen: set[int] = set()
+    merged: list[int] = []
+    for scenario_index in (*base_indices, *special_indices):
+        if scenario_index in seen:
+            continue
+        seen.add(scenario_index)
+        merged.append(scenario_index)
+    return tuple(merged)
 
 
 def evaluate_candidate_with_independent_paths(

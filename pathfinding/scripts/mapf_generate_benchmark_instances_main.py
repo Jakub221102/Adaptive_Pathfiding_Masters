@@ -18,6 +18,7 @@ from pathfinding.src.experiments.mapf_benchmark_instances import (
     INTERACTION_MEDIUM_MIN_CONFLICTS,
     MAPFBenchmarkInstance,
     MAPFInteractionLevel,
+    StaticPrecomputeProgress,
     generate_benchmark_manifest,
     prepare_benchmark_source_pool,
     save_benchmark_manifest,
@@ -202,8 +203,11 @@ def _print_generation_summary(
         print()
 
 
-def _print_precompute_progress(completed: int, total: int) -> None:
-    print(f"  {completed} / {total}")
+def _print_precompute_progress(progress: StaticPrecomputeProgress) -> None:
+    print(f"STATIC PRECOMPUTE {progress.completed} / {progress.total}")
+    print(f"  feasible: {progress.feasible}")
+    print(f"  no spatial path: {progress.no_spatial_path}")
+    print(f"  over horizon: {progress.over_horizon}")
 
 
 def _print_sampling_progress(
@@ -239,14 +243,20 @@ def main() -> None:
     scenarios = load_moving_ai_scenarios(args.scen)
 
     print("Preparing MAPF benchmark source pool...")
+    print("Using static 4-connected independent-path precomputation.")
+    print("Space-Time A* is NOT used during benchmark source preparation.")
     print()
 
-    def _precompute_callback(completed: int, total: int) -> None:
+    precompute_start = time.perf_counter()
+
+    def _precompute_callback(progress: StaticPrecomputeProgress) -> None:
         if args.precompute_progress_every > 0:
-            _print_precompute_progress(completed, total)
+            elapsed = time.perf_counter() - precompute_start
+            _print_precompute_progress(progress)
+            print(f"  elapsed: {elapsed:.1f} s")
 
     if args.precompute_progress_every > 0:
-        print("Precomputing independent paths:")
+        print("Static precomputing independent paths:")
 
     precompute_start = time.perf_counter()
     source_pool = prepare_benchmark_source_pool(
@@ -265,12 +275,20 @@ def main() -> None:
     feasible_count = len(source_pool.feasible_indices)
     failed_count = len(source_pool.precompute_result.failed_scenario_indices)
 
+    precompute_result = source_pool.precompute_result
+
     print()
     print(f"Eligible MovingAI scenarios: {eligible_count}")
-    print("Precompute complete:")
-    print(f"  feasible: {feasible_count}")
-    print(f"  failed: {failed_count}")
-    print(f"  time: {precompute_time_s:.1f} s")
+    print("STATIC PRECOMPUTE COMPLETE")
+    print(f"  eligible MovingAI sources: {eligible_count}")
+    print(f"  static spatial paths found: {precompute_result.spatial_paths_found}")
+    print(f"  within horizon: {feasible_count}")
+    print(f"  over horizon: {precompute_result.over_horizon_count}")
+    print(f"  no spatial path: {precompute_result.no_spatial_path_count}")
+    print(f"  feasible source pool: {feasible_count}")
+    print(f"  elapsed: {precompute_time_s:.1f} s")
+    if eligible_count:
+        print(f"  paths/sec: {eligible_count / precompute_time_s:.1f}")
 
     sampling_start = time.perf_counter()
     generation_result = generate_benchmark_manifest(

@@ -87,6 +87,19 @@ class MAPFPrecomputedSourcePath:
 class MAPFPrecomputePathsResult:
     paths: tuple[MAPFPrecomputedSourcePath, ...]
     failed_scenario_indices: tuple[int, ...]
+    no_spatial_path_count: int = 0
+    over_horizon_count: int = 0
+    spatial_paths_found: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class StaticPrecomputeProgress:
+    completed: int
+    total: int
+    feasible: int
+    no_spatial_path: int
+    over_horizon: int
+    spatial_paths_found: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,8 +144,13 @@ def precompute_independent_paths(
     *,
     max_timestep: int,
     progress_every: int = 0,
-    progress_callback: Callable[[int, int], None] | None = None,
+    progress_callback: Callable[[StaticPrecomputeProgress], None] | None = None,
 ) -> MAPFPrecomputePathsResult:
+    from pathfinding.src.experiments.mapf_independent_static_path import (
+        find_independent_static_path,
+        independent_path_fits_horizon,
+    )
+
     if max_timestep < 0:
         raise ValueError("max_timestep must be non-negative")
     if progress_every < 0:
@@ -142,6 +160,24 @@ def precompute_independent_paths(
     failed: list[int] = []
     total = len(scenario_indices)
     planned: dict[int, MAPFPrecomputedSourcePath | None] = {}
+    no_spatial_path_count = 0
+    over_horizon_count = 0
+    spatial_paths_found = 0
+    feasible_count = 0
+
+    def _emit_progress(completed: int) -> None:
+        if progress_callback is None:
+            return
+        progress_callback(
+            StaticPrecomputeProgress(
+                completed=completed,
+                total=total,
+                feasible=feasible_count,
+                no_spatial_path=no_spatial_path_count,
+                over_horizon=over_horizon_count,
+                spatial_paths_found=spatial_paths_found,
+            )
+        )
 
     for completed, scenario_index in enumerate(scenario_indices, start=1):
         if scenario_index in planned:
@@ -150,23 +186,15 @@ def precompute_independent_paths(
                 failed.append(scenario_index)
             else:
                 succeeded.append(cached)
-            if (
-                progress_every > 0
-                and progress_callback is not None
-                and completed % progress_every == 0
-            ):
-                progress_callback(completed, total)
+            if progress_every > 0 and completed % progress_every == 0:
+                _emit_progress(completed)
             continue
 
         if scenario_index < 0 or scenario_index >= len(scenarios):
             planned[scenario_index] = None
             failed.append(scenario_index)
-            if (
-                progress_every > 0
-                and progress_callback is not None
-                and completed % progress_every == 0
-            ):
-                progress_callback(completed, total)
+            if progress_every > 0 and completed % progress_every == 0:
+                _emit_progress(completed)
             continue
 
         scenario = scenarios[scenario_index]
@@ -175,15 +203,16 @@ def precompute_independent_paths(
             start=scenario.start,
             goal=scenario.goal,
         )
-        path = find_path(
-            grid_map=grid_map,
-            agent=agent,
-            max_timestep=max_timestep,
-            constraints=(),
-        )
+        path = find_independent_static_path(grid_map=grid_map, agent=agent)
         if path is None:
             planned[scenario_index] = None
             failed.append(scenario_index)
+            no_spatial_path_count += 1
+        elif not independent_path_fits_horizon(path, max_timestep):
+            planned[scenario_index] = None
+            failed.append(scenario_index)
+            spatial_paths_found += 1
+            over_horizon_count += 1
         else:
             precomputed = MAPFPrecomputedSourcePath(
                 scenario_index=scenario_index,
@@ -191,20 +220,21 @@ def precompute_independent_paths(
             )
             planned[scenario_index] = precomputed
             succeeded.append(precomputed)
+            spatial_paths_found += 1
+            feasible_count += 1
 
-        if (
-            progress_every > 0
-            and progress_callback is not None
-            and completed % progress_every == 0
-        ):
-            progress_callback(completed, total)
+        if progress_every > 0 and completed % progress_every == 0:
+            _emit_progress(completed)
 
-    if progress_callback is not None and total > 0:
-        progress_callback(total, total)
+    if total > 0:
+        _emit_progress(total)
 
     return MAPFPrecomputePathsResult(
         paths=tuple(succeeded),
         failed_scenario_indices=tuple(failed),
+        no_spatial_path_count=no_spatial_path_count,
+        over_horizon_count=over_horizon_count,
+        spatial_paths_found=spatial_paths_found,
     )
 
 
@@ -308,7 +338,7 @@ def prepare_benchmark_source_pool(
     min_reference_length: float,
     max_timestep: int,
     precompute_progress_every: int = 0,
-    precompute_progress_callback: Callable[[int, int], None] | None = None,
+    precompute_progress_callback: Callable[[StaticPrecomputeProgress], None] | None = None,
 ) -> MAPFBenchmarkSourcePool:
     if max_timestep < 0:
         raise ValueError("max_timestep must be non-negative")
@@ -865,7 +895,7 @@ def generate_benchmark_instances(
     min_reference_length: float,
     max_attempts: int,
     precompute_progress_every: int = 0,
-    precompute_progress_callback: Callable[[int, int], None] | None = None,
+    precompute_progress_callback: Callable[[StaticPrecomputeProgress], None] | None = None,
     sampling_progress_every: int = 0,
     sampling_progress_callback: Callable[
         [int, int, dict[MAPFInteractionLevel, int], dict[MAPFInteractionLevel, int]],
@@ -921,7 +951,7 @@ def generate_benchmark_manifest(
     max_attempts: int,
     source_pool: MAPFBenchmarkSourcePool | None = None,
     precompute_progress_every: int = 0,
-    precompute_progress_callback: Callable[[int, int], None] | None = None,
+    precompute_progress_callback: Callable[[StaticPrecomputeProgress], None] | None = None,
     sampling_progress_every: int = 0,
     sampling_progress_callback: Callable[
         [int, int, int, dict[MAPFInteractionLevel, int], dict[MAPFInteractionLevel, int]],

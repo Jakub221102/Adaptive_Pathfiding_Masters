@@ -11,6 +11,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from pathfinding.src.experiments.mapf_benchmark_instances import (
+    StaticPrecomputeProgress,
     _eligible_scenario_indices,
     precompute_independent_paths,
 )
@@ -52,8 +53,13 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _print_progress(completed: int, total: int) -> None:
-    print(f"Precomputing independent paths: {completed} / {total}")
+def _print_progress(progress: StaticPrecomputeProgress) -> None:
+    print(
+        f"STATIC PRECOMPUTE {progress.completed} / {progress.total} "
+        f"(feasible={progress.feasible}, "
+        f"no_spatial={progress.no_spatial_path}, "
+        f"over_horizon={progress.over_horizon})"
+    )
 
 
 def main() -> None:
@@ -103,6 +109,8 @@ def main() -> None:
     print(f"Requested: {len(selected)}")
     print(f"Succeeded: {succeeded}")
     print(f"Failed: {failed}")
+    print(f"No spatial path: {result.no_spatial_path_count}")
+    print(f"Over horizon: {result.over_horizon_count}")
     print(f"Total runtime: {total_elapsed:.3f} s")
     if selected:
         print(f"Mean per scenario: {mean_per_path:.4f} s")
