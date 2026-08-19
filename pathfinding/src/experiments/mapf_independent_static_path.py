@@ -1,0 +1,208 @@
+"""Static 4-connected independent path planner for MAPF benchmark evaluation.
+
+Experimental helper only — not used by production MAPF coordination (PP/CBS).
+"""
+
+from __future__ import annotations
+
+import heapq
+from collections.abc import Mapping, Sequence
+
+from pathfinding.src.algorithms.mapf.conflicts import detect_conflicts
+from pathfinding.src.algorithms.mapf.metrics import makespan, sum_of_costs
+from pathfinding.src.algorithms.mapf.models import AgentPath, MAPFAgent, TimedState
+from pathfinding.src.core.models import GridMap, Position, Scenario
+from pathfinding.src.experiments.mapf_benchmark_instances import (
+    MAPFBenchmarkInstance,
+    MAPFInteractionLevel,
+    classify_interaction_level,
+    count_conflicting_agent_pairs,
+    _count_conflict_types,
+    _validate_candidate_indices,
+)
+
+# Spatial move order matches Space-Time A* (_MOVEMENT_DELTAS) without WAIT.
+_SPATIAL_MOVEMENT_DELTAS: tuple[tuple[int, int], ...] = (
+    (-1, 0),
+    (1, 0),
+    (0, -1),
+    (0, 1),
+)
+
+SpatialCell = tuple[int, int]
+
+
+def _manhattan_heuristic(row: int, col: int, goal_row: int, goal_col: int) -> int:
+    return abs(row - goal_row) + abs(col - goal_col)
+
+
+def _is_valid_cell(grid_map: GridMap, row: int, col: int) -> bool:
+    if row < 0 or col < 0:
+        return False
+    if row >= grid_map.height or col >= grid_map.width:
+        return False
+
+    position = Position(row=row, col=col)
+    return grid_map.is_walkable(position)
+
+
+def find_independent_static_path(
+    grid_map: GridMap,
+    agent: MAPFAgent,
+) -> AgentPath | None:
+    start = agent.start
+    goal = agent.goal
+
+    if not _is_valid_cell(grid_map, start.row, start.col):
+        return None
+    if not _is_valid_cell(grid_map, goal.row, goal.col):
+        return None
+
+    if start.row == goal.row and start.col == goal.col:
+        return AgentPath(
+            agent_id=agent.agent_id,
+            states=(TimedState(row=start.row, col=start.col, timestep=0),),
+        )
+
+    goal_row = goal.row
+    goal_col = goal.col
+    start_cell = (start.row, start.col)
+
+    open_heap: list[tuple[int, int, int, int]] = []
+    counter = 0
+    g_score: dict[SpatialCell, int] = {start_cell: 0}
+    came_from: dict[SpatialCell, SpatialCell] = {}
+    closed: set[SpatialCell] = set()
+
+    initial_h = _manhattan_heuristic(start.row, start.col, goal_row, goal_col)
+    heapq.heappush(open_heap, (initial_h, counter, start.row, start.col))
+    counter += 1
+
+    while open_heap:
+        _, _, row, col = heapq.heappop(open_heap)
+        current = (row, col)
+
+        if current in closed:
+            continue
+
+        closed.add(current)
+
+        if row == goal_row and col == goal_col:
+            spatial_path: list[SpatialCell] = [current]
+            node = current
+            while node in came_from:
+                node = came_from[node]
+                spatial_path.append(node)
+            spatial_path.reverse()
+
+            states = tuple(
+                TimedState(row=cell_row, col=cell_col, timestep=timestep)
+                for timestep, (cell_row, cell_col) in enumerate(spatial_path)
+            )
+            return AgentPath(agent_id=agent.agent_id, states=states)
+
+        current_g = g_score[current]
+
+        for row_delta, col_delta in _SPATIAL_MOVEMENT_DELTAS:
+            next_row = row + row_delta
+            next_col = col + col_delta
+
+            if not _is_valid_cell(grid_map, next_row, next_col):
+                continue
+
+            neighbor = (next_row, next_col)
+            if neighbor in closed:
+                continue
+
+            tentative_g = current_g + 1
+            if neighbor not in g_score or tentative_g < g_score[neighbor]:
+                came_from[neighbor] = current
+                g_score[neighbor] = tentative_g
+                f_score = tentative_g + _manhattan_heuristic(
+                    next_row,
+                    next_col,
+                    goal_row,
+                    goal_col,
+                )
+                heapq.heappush(open_heap, (f_score, counter, next_row, next_col))
+                counter += 1
+
+    return None
+
+
+def independent_path_cost(path: AgentPath | None) -> int | None:
+    if path is None:
+        return None
+    return len(path.states) - 1
+
+
+def spatial_trajectory(path: AgentPath) -> tuple[tuple[int, int], ...]:
+    return tuple((state.row, state.col) for state in path.states)
+
+
+def trajectories_equal(path_a: AgentPath, path_b: AgentPath) -> bool:
+    return spatial_trajectory(path_a) == spatial_trajectory(path_b)
+
+
+def select_diagnostic_scenario_indices(
+    eligible_indices: Sequence[int],
+    *,
+    early_count: int,
+    middle_count: int,
+    late_count: int,
+) -> tuple[int, ...]:
+    total = early_count + middle_count + late_count
+    if total <= 0:
+        raise ValueError("diagnostic selection counts must sum to a positive value")
+    if len(eligible_indices) < total:
+        raise ValueError(
+            f"Only {len(eligible_indices)} eligible scenarios; need at least {total}."
+        )
+
+    early = eligible_indices[:early_count]
+    late = eligible_indices[-late_count:]
+    middle_start = max(0, (len(eligible_indices) - middle_count) // 2)
+    middle = eligible_indices[middle_start : middle_start + middle_count]
+    return tuple(early + middle + late)
+
+
+def evaluate_candidate_with_independent_paths(
+    grid_map: GridMap,
+    scenarios: Sequence[Scenario],
+    scenario_indices: Sequence[int],
+    independent_paths: Sequence[AgentPath],
+) -> MAPFBenchmarkInstance | None:
+    if not _validate_candidate_indices(scenario_indices, scenarios, grid_map):
+        return None
+    if len(independent_paths) != len(scenario_indices):
+        raise ValueError("independent_paths length must match scenario_indices")
+
+    conflicts = detect_conflicts(tuple(independent_paths))
+    conflict_count = len(conflicts)
+    vertex_count, edge_count = _count_conflict_types(conflicts)
+
+    return MAPFBenchmarkInstance(
+        instance_id="",
+        agent_count=len(scenario_indices),
+        interaction_level=classify_interaction_level(conflict_count),
+        scenario_indices=tuple(scenario_indices),
+        independent_conflict_count=conflict_count,
+        conflicting_agent_pair_count=count_conflicting_agent_pairs(conflicts),
+        independent_soc=sum_of_costs(independent_paths),
+        independent_makespan=makespan(independent_paths),
+        vertex_conflict_count=vertex_count,
+        edge_conflict_count=edge_count,
+    )
+
+
+def build_independent_paths_from_lookup(
+    scenario_indices: Sequence[int],
+    lookup: Mapping[int, tuple[TimedState, ...]],
+) -> tuple[AgentPath, ...] | None:
+    paths: list[AgentPath] = []
+    for agent_id, scenario_index in enumerate(scenario_indices):
+        states = lookup.get(scenario_index)
+        if states is None:
+            return None
+        paths.append(AgentPath(agent_id=agent_id, states=states))
+    return tuple(paths)
