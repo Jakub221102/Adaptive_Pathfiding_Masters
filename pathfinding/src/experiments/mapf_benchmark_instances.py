@@ -89,7 +89,7 @@ class MAPFPrecomputePathsResult:
     failed_scenario_indices: tuple[int, ...]
     no_spatial_path_count: int = 0
     over_horizon_count: int = 0
-    spatial_paths_found: int = 0
+    spatially_reachable_count: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,7 +99,7 @@ class StaticPrecomputeProgress:
     feasible: int
     no_spatial_path: int
     over_horizon: int
-    spatial_paths_found: int
+    spatially_reachable: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,8 +147,8 @@ def precompute_independent_paths(
     progress_callback: Callable[[StaticPrecomputeProgress], None] | None = None,
 ) -> MAPFPrecomputePathsResult:
     from pathfinding.src.experiments.mapf_independent_static_path import (
-        find_independent_static_path,
-        independent_path_fits_horizon,
+        StaticPathSearchStatus,
+        find_independent_static_path_bounded_result,
     )
 
     if max_timestep < 0:
@@ -162,7 +162,7 @@ def precompute_independent_paths(
     planned: dict[int, MAPFPrecomputedSourcePath | None] = {}
     no_spatial_path_count = 0
     over_horizon_count = 0
-    spatial_paths_found = 0
+    spatially_reachable_count = 0
     feasible_count = 0
 
     def _emit_progress(completed: int) -> None:
@@ -175,7 +175,7 @@ def precompute_independent_paths(
                 feasible=feasible_count,
                 no_spatial_path=no_spatial_path_count,
                 over_horizon=over_horizon_count,
-                spatial_paths_found=spatial_paths_found,
+                spatially_reachable=spatially_reachable_count,
             )
         )
 
@@ -203,25 +203,30 @@ def precompute_independent_paths(
             start=scenario.start,
             goal=scenario.goal,
         )
-        path = find_independent_static_path(grid_map=grid_map, agent=agent)
-        if path is None:
-            planned[scenario_index] = None
-            failed.append(scenario_index)
-            no_spatial_path_count += 1
-        elif not independent_path_fits_horizon(path, max_timestep):
-            planned[scenario_index] = None
-            failed.append(scenario_index)
-            spatial_paths_found += 1
-            over_horizon_count += 1
-        else:
+        bounded_result = find_independent_static_path_bounded_result(
+            grid_map=grid_map,
+            agent=agent,
+            max_cost=max_timestep,
+        )
+        if bounded_result.status == StaticPathSearchStatus.SUCCESS:
+            assert bounded_result.path is not None
             precomputed = MAPFPrecomputedSourcePath(
                 scenario_index=scenario_index,
-                states=path.states,
+                states=bounded_result.path.states,
             )
             planned[scenario_index] = precomputed
             succeeded.append(precomputed)
-            spatial_paths_found += 1
+            spatially_reachable_count += 1
             feasible_count += 1
+        elif bounded_result.status == StaticPathSearchStatus.OVER_COST_BOUND:
+            planned[scenario_index] = None
+            failed.append(scenario_index)
+            spatially_reachable_count += 1
+            over_horizon_count += 1
+        else:
+            planned[scenario_index] = None
+            failed.append(scenario_index)
+            no_spatial_path_count += 1
 
         if progress_every > 0 and completed % progress_every == 0:
             _emit_progress(completed)
@@ -234,7 +239,7 @@ def precompute_independent_paths(
         failed_scenario_indices=tuple(failed),
         no_spatial_path_count=no_spatial_path_count,
         over_horizon_count=over_horizon_count,
-        spatial_paths_found=spatial_paths_found,
+        spatially_reachable_count=spatially_reachable_count,
     )
 
 
@@ -560,7 +565,7 @@ def _sample_benchmark_instances(
         None,
     ]
     | None = None,
-    accepted_instance_callback: Callable[[MAPFBenchmarkInstance], None] | None = None,
+    accepted_instance_callback: Callable[[MAPFBenchmarkInstance, int], None] | None = None,
 ) -> MAPFBenchmarkGenerationResult:
     if agent_count <= 0:
         raise ValueError("agent_count must be positive")
@@ -667,7 +672,7 @@ def _sample_benchmark_instances(
         needed[level] -= 1
 
         if accepted_instance_callback is not None:
-            accepted_instance_callback(instance)
+            accepted_instance_callback(instance, attempts)
 
     if any(count > 0 for count in needed.values()):
         found = _count_by_level(
@@ -718,7 +723,7 @@ def generate_benchmark_instances_from_precomputed(
         None,
     ]
     | None = None,
-    accepted_instance_callback: Callable[[MAPFBenchmarkInstance], None] | None = None,
+    accepted_instance_callback: Callable[[MAPFBenchmarkInstance, int], None] | None = None,
 ) -> MAPFBenchmarkGenerationResult:
     return _sample_benchmark_instances(
         grid_map=grid_map,
@@ -902,7 +907,7 @@ def generate_benchmark_instances(
         None,
     ]
     | None = None,
-    accepted_instance_callback: Callable[[MAPFBenchmarkInstance], None] | None = None,
+    accepted_instance_callback: Callable[[MAPFBenchmarkInstance, int], None] | None = None,
 ) -> MAPFBenchmarkGenerationResult:
     if agent_count <= 0:
         raise ValueError("agent_count must be positive")
@@ -958,7 +963,7 @@ def generate_benchmark_manifest(
         None,
     ]
     | None = None,
-    accepted_instance_callback: Callable[[MAPFBenchmarkInstance], None] | None = None,
+    accepted_instance_callback: Callable[[MAPFBenchmarkInstance, int], None] | None = None,
     generation_start_callback: Callable[[int], None] | None = None,
 ) -> MAPFBenchmarkManifestGenerationResult:
     if not agent_counts:

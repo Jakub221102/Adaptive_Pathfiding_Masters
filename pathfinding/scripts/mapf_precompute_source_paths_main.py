@@ -28,7 +28,7 @@ DEFAULT_PROGRESS_EVERY = 10
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Precompute independent Space-Time A* paths for MovingAI scenarios.",
+        description="Precompute bounded static independent paths for MovingAI scenarios.",
     )
     parser.add_argument("--map", type=Path, default=DEFAULT_MAP_PATH)
     parser.add_argument("--scen", type=Path, default=DEFAULT_SCEN_PATH)

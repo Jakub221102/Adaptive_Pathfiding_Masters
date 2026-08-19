@@ -9,8 +9,11 @@ from pathfinding.src.experiments.mapf_benchmark_instances import (
     evaluate_benchmark_candidate,
 )
 from pathfinding.src.experiments.mapf_independent_static_path import (
+    StaticPathSearchStatus,
     evaluate_candidate_with_independent_paths,
     find_independent_static_path,
+    find_independent_static_path_bounded,
+    find_independent_static_path_bounded_result,
     independent_path_cost,
     independent_path_excess_moves,
     independent_path_fits_horizon,
@@ -343,3 +346,131 @@ def test_merge_diagnostic_scenario_indices_deduplicates_special() -> None:
         (1125, 999),
     )
     assert merged == (50, 51, 1125, 60, 999)
+
+
+def test_bounded_negative_max_cost_raises() -> None:
+    grid_map = build_grid_map([[0]], name="single.map")
+    with pytest.raises(ValueError, match="max_cost must be non-negative"):
+        find_independent_static_path_bounded(
+            grid_map,
+            _agent(0, 0, 0, 0),
+            max_cost=-1,
+        )
+
+
+def test_bounded_start_equals_goal_zero_max_cost() -> None:
+    grid_map = build_grid_map([[0]], name="single.map")
+    path = find_independent_static_path_bounded(
+        grid_map,
+        _agent(0, 0, 0, 0),
+        max_cost=0,
+    )
+    assert path is not None
+    assert path.states == (TimedState(row=0, col=0, timestep=0),)
+
+
+def test_bounded_manhattan_short_circuit_skips_astar() -> None:
+    grid_map = build_grid_map(
+        [[0, 0, 0, 0, 0] for _ in range(3)],
+        name="manhattan_skip.map",
+    )
+    agent = _agent(1, 0, 1, 4)
+
+    import pathfinding.src.experiments.mapf_independent_static_path as static_module
+
+    original_astar = static_module._static_astar
+
+    def raising_astar(*args, **kwargs):
+        raise AssertionError("_static_astar must not run when Manhattan exceeds max_cost")
+
+    static_module._static_astar = raising_astar
+    try:
+        result = find_independent_static_path_bounded_result(
+            grid_map,
+            agent,
+            max_cost=3,
+        )
+    finally:
+        static_module._static_astar = original_astar
+
+    assert result.path is None
+    assert result.status == StaticPathSearchStatus.OVER_COST_BOUND
+    assert result.expansions == 0
+
+
+def test_bounded_exact_boundary_semantics() -> None:
+    grid_map = build_grid_map(
+        [[0, 0, 0, 0, 0] for _ in range(3)],
+        name="boundary.map",
+    )
+    agent = _agent(1, 0, 1, 4)
+    unbounded = find_independent_static_path(grid_map, agent)
+    assert unbounded is not None
+    assert independent_path_cost(unbounded) == 4
+
+    assert find_independent_static_path_bounded(grid_map, agent, max_cost=3) is None
+    at_limit = find_independent_static_path_bounded(grid_map, agent, max_cost=4)
+    above_limit = find_independent_static_path_bounded(grid_map, agent, max_cost=5)
+    assert at_limit == unbounded
+    assert above_limit == unbounded
+
+
+@pytest.mark.parametrize(
+    "grid_cells,agent",
+    [
+        (
+            [[0, 0, 0, 0, 0] for _ in range(3)],
+            _agent(1, 0, 1, 4),
+        ),
+        (
+            [
+                [0, 0, 0, 0, 0],
+                [0, 1, 1, 1, 0],
+                [0, 0, 0, 0, 0],
+            ],
+            _agent(1, 0, 1, 4),
+        ),
+        (
+            [
+                [0, 0, 0],
+                [0, 0, 0],
+                [0, 0, 0],
+            ],
+            _agent(0, 0, 2, 2),
+        ),
+    ],
+)
+def test_bounded_matches_unbounded_when_feasible(
+    grid_cells: list[list[int]],
+    agent: MAPFAgent,
+) -> None:
+    grid_map = build_grid_map(grid_cells, name="equivalence.map")
+    unbounded = find_independent_static_path(grid_map, agent)
+    assert unbounded is not None
+    cost = independent_path_cost(unbounded)
+    assert cost is not None
+
+    bounded = find_independent_static_path_bounded(
+        grid_map,
+        agent,
+        max_cost=cost,
+    )
+    assert bounded == unbounded
+
+
+def test_bounded_no_path_on_disconnected_grid() -> None:
+    grid_map = build_grid_map(
+        [
+            [0, 1, 0],
+            [0, 1, 0],
+            [0, 1, 0],
+        ],
+        name="split.map",
+    )
+    result = find_independent_static_path_bounded_result(
+        grid_map,
+        _agent(0, 0, 0, 2),
+        max_cost=64,
+    )
+    assert result.path is None
+    assert result.status == StaticPathSearchStatus.NO_PATH

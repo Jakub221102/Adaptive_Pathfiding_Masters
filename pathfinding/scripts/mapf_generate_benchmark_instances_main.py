@@ -228,8 +228,9 @@ def _print_sampling_progress(
         )
 
 
-def _print_accepted_instance(instance: MAPFBenchmarkInstance) -> None:
+def _print_accepted_instance(instance: MAPFBenchmarkInstance, attempt: int) -> None:
     print(f"ACCEPTED {instance.instance_id}")
+    print(f"  attempt={attempt}")
     print(f"  conflicts={instance.independent_conflict_count}")
     print(f"  pairs={instance.conflicting_agent_pair_count}")
     print(f"  SoC={instance.independent_soc}")
@@ -243,7 +244,7 @@ def main() -> None:
     scenarios = load_moving_ai_scenarios(args.scen)
 
     print("Preparing MAPF benchmark source pool...")
-    print("Using static 4-connected independent-path precomputation.")
+    print("Using bounded static 4-connected independent-path precomputation.")
     print("Space-Time A* is NOT used during benchmark source preparation.")
     print()
 
@@ -281,7 +282,7 @@ def main() -> None:
     print(f"Eligible MovingAI scenarios: {eligible_count}")
     print("STATIC PRECOMPUTE COMPLETE")
     print(f"  eligible MovingAI sources: {eligible_count}")
-    print(f"  static spatial paths found: {precompute_result.spatial_paths_found}")
+    print(f"  sources spatially reachable: {precompute_result.spatially_reachable_count}")
     print(f"  within horizon: {feasible_count}")
     print(f"  over horizon: {precompute_result.over_horizon_count}")
     print(f"  no spatial path: {precompute_result.no_spatial_path_count}")

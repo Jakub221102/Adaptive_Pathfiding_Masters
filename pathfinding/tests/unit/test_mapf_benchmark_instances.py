@@ -18,6 +18,8 @@ from pathfinding.src.algorithms.mapf.models import (
 from pathfinding.src.experiments.mapf_independent_static_path import (
     evaluate_candidate_with_independent_paths,
     find_independent_static_path,
+    find_independent_static_path_bounded_result,
+    independent_path_fits_horizon,
 )
 from pathfinding.src.algorithms.mapf.space_time_astar import find_path
 from pathfinding.src.core.models import GridMap, Position, Scenario
@@ -601,16 +603,16 @@ def test_precompute_plans_each_source_scenario_once() -> None:
     grid_map, scenarios = _build_crossing_scenario_pool()
     indices = (2, 2, 5)
     plan_calls = 0
-    original_static_path = find_independent_static_path
+    original_bounded = find_independent_static_path_bounded_result
 
-    def counting_static_path(*args, **kwargs):
+    def counting_bounded(*args, **kwargs):
         nonlocal plan_calls
         plan_calls += 1
-        return original_static_path(*args, **kwargs)
+        return original_bounded(*args, **kwargs)
 
     import pathfinding.src.experiments.mapf_independent_static_path as static_module
 
-    static_module.find_independent_static_path = counting_static_path
+    static_module.find_independent_static_path_bounded_result = counting_bounded
     try:
         result = precompute_independent_paths(
             grid_map=grid_map,
@@ -619,7 +621,7 @@ def test_precompute_plans_each_source_scenario_once() -> None:
             max_timestep=64,
         )
     finally:
-        static_module.find_independent_static_path = original_static_path
+        static_module.find_independent_static_path_bounded_result = original_bounded
 
     assert [path.scenario_index for path in result.paths] == [2, 2, 5]
     assert result.paths[0].states == result.paths[1].states
@@ -813,10 +815,17 @@ def test_sampling_performs_zero_pathfinding_calls_after_precompute() -> None:
             "find_independent_static_path must not be called during candidate sampling"
         )
 
+    def raising_bounded_static_path(*args, **kwargs):
+        raise AssertionError(
+            "find_independent_static_path_bounded must not be called during candidate sampling"
+        )
+
     original_find_path = benchmark_module.find_path
     original_static_path = static_module.find_independent_static_path
+    original_bounded_static_path = static_module.find_independent_static_path_bounded
     benchmark_module.find_path = raising_find_path
     static_module.find_independent_static_path = raising_static_path
+    static_module.find_independent_static_path_bounded = raising_bounded_static_path
     try:
         result = generate_benchmark_instances_from_precomputed(
             grid_map=grid_map,
@@ -831,6 +840,7 @@ def test_sampling_performs_zero_pathfinding_calls_after_precompute() -> None:
     finally:
         benchmark_module.find_path = original_find_path
         static_module.find_independent_static_path = original_static_path
+        static_module.find_independent_static_path_bounded = original_bounded_static_path
 
     assert len(result.instances) == 3
 
@@ -838,16 +848,16 @@ def test_sampling_performs_zero_pathfinding_calls_after_precompute() -> None:
 def test_full_pool_precomputed_once_per_generation_call() -> None:
     grid_map, scenarios = _build_crossing_scenario_pool()
     plan_calls = 0
-    original_static_path = find_independent_static_path
+    original_bounded = find_independent_static_path_bounded_result
 
-    def counting_static_path(*args, **kwargs):
+    def counting_bounded(*args, **kwargs):
         nonlocal plan_calls
         plan_calls += 1
-        return original_static_path(*args, **kwargs)
+        return original_bounded(*args, **kwargs)
 
     import pathfinding.src.experiments.mapf_independent_static_path as static_module
 
-    static_module.find_independent_static_path = counting_static_path
+    static_module.find_independent_static_path_bounded_result = counting_bounded
     try:
         source_pool = prepare_benchmark_source_pool(
             grid_map=grid_map,
@@ -869,7 +879,7 @@ def test_full_pool_precomputed_once_per_generation_call() -> None:
             source_pool=source_pool,
         )
     finally:
-        static_module.find_independent_static_path = original_static_path
+        static_module.find_independent_static_path_bounded_result = original_bounded
 
     assert plan_calls == 0
     assert precompute_calls == len(set(source_pool.eligible_indices))
@@ -957,7 +967,7 @@ def test_progress_callbacks_do_not_affect_generated_instances() -> None:
         precompute_progress_callback=lambda *_args: None,
         sampling_progress_every=1,
         sampling_progress_callback=lambda *_args: None,
-        accepted_instance_callback=lambda _instance: None,
+        accepted_instance_callback=lambda _instance, _attempt: None,
     )
 
     assert silent.instances == noisy.instances
@@ -1038,3 +1048,167 @@ def test_production_precompute_does_not_call_space_time_astar() -> None:
     finally:
         benchmark_module.find_path = original_find_path
 
+
+def _reference_unbounded_classification(
+    grid_map: GridMap,
+    scenarios: list[Scenario],
+    scenario_indices: tuple[int, ...],
+    max_timestep: int,
+) -> tuple[set[int], set[int], int, int]:
+    feasible: set[int] = set()
+    failed: set[int] = set()
+    no_spatial_path_count = 0
+    over_horizon_count = 0
+
+    for scenario_index in scenario_indices:
+        scenario = scenarios[scenario_index]
+        agent = MAPFAgent(
+            agent_id=0,
+            start=scenario.start,
+            goal=scenario.goal,
+        )
+        path = find_independent_static_path(grid_map=grid_map, agent=agent)
+        if path is None:
+            failed.add(scenario_index)
+            no_spatial_path_count += 1
+        elif not independent_path_fits_horizon(path, max_timestep):
+            failed.add(scenario_index)
+            over_horizon_count += 1
+        else:
+            feasible.add(scenario_index)
+
+    return feasible, failed, no_spatial_path_count, over_horizon_count
+
+
+def test_precompute_classifies_over_horizon_not_no_path() -> None:
+    grid_map = build_grid_map([[0, 0, 0, 0, 0]], name="line.map")
+    scenarios = [
+        _scenario(0, 0, 0, 4, optimal_length=25.0, width=5, height=1),
+    ]
+
+    result = precompute_independent_paths(
+        grid_map=grid_map,
+        scenarios=scenarios,
+        scenario_indices=(0,),
+        max_timestep=3,
+    )
+
+    assert result.paths == ()
+    assert result.over_horizon_count == 1
+    assert result.no_spatial_path_count == 0
+    assert result.spatially_reachable_count == 1
+
+
+def test_precompute_classifies_no_spatial_path_not_over_horizon() -> None:
+    grid_map = build_grid_map(
+        [
+            [0, 1, 0],
+            [0, 1, 0],
+            [0, 1, 0],
+        ],
+        name="split.map",
+    )
+    scenarios = [
+        _scenario(0, 0, 0, 2, optimal_length=25.0, width=3, height=3),
+    ]
+
+    result = precompute_independent_paths(
+        grid_map=grid_map,
+        scenarios=scenarios,
+        scenario_indices=(0,),
+        max_timestep=64,
+    )
+
+    assert result.paths == ()
+    assert result.no_spatial_path_count == 1
+    assert result.over_horizon_count == 0
+    assert result.spatially_reachable_count == 0
+
+
+def test_bounded_precompute_matches_unbounded_reference_classification() -> None:
+    grid_map, scenarios = _build_crossing_scenario_pool()
+    eligible = _eligible_scenario_indices(
+        scenarios=scenarios,
+        grid_map=grid_map,
+        min_reference_length=20.0,
+    )
+    max_timestep = 64
+
+    ref_feasible, ref_failed, ref_no_path, ref_over = _reference_unbounded_classification(
+        grid_map,
+        scenarios,
+        tuple(eligible),
+        max_timestep,
+    )
+    bounded = precompute_independent_paths(
+        grid_map=grid_map,
+        scenarios=scenarios,
+        scenario_indices=tuple(eligible),
+        max_timestep=max_timestep,
+    )
+
+    bounded_feasible = {path.scenario_index for path in bounded.paths}
+    bounded_failed = set(bounded.failed_scenario_indices)
+
+    assert bounded_feasible == ref_feasible
+    assert bounded_failed == ref_failed
+    assert bounded.no_spatial_path_count == ref_no_path
+    assert bounded.over_horizon_count == ref_over
+
+
+def test_bounded_precompute_matches_unbounded_reference_paths() -> None:
+    grid_map, scenarios = _build_crossing_scenario_pool()
+    eligible = _eligible_scenario_indices(
+        scenarios=scenarios,
+        grid_map=grid_map,
+        min_reference_length=20.0,
+    )
+    max_timestep = 64
+
+    bounded = precompute_independent_paths(
+        grid_map=grid_map,
+        scenarios=scenarios,
+        scenario_indices=tuple(eligible),
+        max_timestep=max_timestep,
+    )
+    lookup = build_precomputed_path_lookup(bounded.paths)
+
+    for scenario_index in lookup:
+        scenario = scenarios[scenario_index]
+        reference = find_independent_static_path(
+            grid_map,
+            MAPFAgent(agent_id=0, start=scenario.start, goal=scenario.goal),
+        )
+        assert reference is not None
+        assert lookup[scenario_index].states == reference.states
+
+
+def test_accepted_instance_callback_receives_attempt_number() -> None:
+    grid_map, scenarios = _build_crossing_scenario_pool()
+    source_pool = prepare_benchmark_source_pool(
+        grid_map=grid_map,
+        scenarios=scenarios,
+        min_reference_length=20.0,
+        max_timestep=64,
+    )
+    attempts_seen: list[int] = []
+
+    def record_attempt(_instance: MAPFBenchmarkInstance, attempt: int) -> None:
+        attempts_seen.append(attempt)
+
+    result = generate_benchmark_instances_from_precomputed(
+        grid_map=grid_map,
+        scenarios=scenarios,
+        agent_count=3,
+        instances_per_level=1,
+        max_timestep=64,
+        seed=5,
+        max_attempts=5000,
+        source_pool=source_pool,
+        accepted_instance_callback=record_attempt,
+    )
+
+    assert len(result.instances) == 3
+    assert len(attempts_seen) == 3
+    assert all(attempt > 0 for attempt in attempts_seen)
+    assert max(attempts_seen) <= result.attempts

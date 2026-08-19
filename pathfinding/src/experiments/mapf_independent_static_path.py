@@ -6,7 +6,10 @@ Experimental helper only — not used by production MAPF coordination (PP/CBS).
 from __future__ import annotations
 
 import heapq
+from collections import deque
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from enum import Enum
 
 from pathfinding.src.algorithms.mapf.conflicts import detect_conflicts
 from pathfinding.src.algorithms.mapf.metrics import makespan, sum_of_costs
@@ -32,6 +35,19 @@ _SPATIAL_MOVEMENT_DELTAS: tuple[tuple[int, int], ...] = (
 SpatialCell = tuple[int, int]
 
 
+class StaticPathSearchStatus(Enum):
+    SUCCESS = "success"
+    OVER_COST_BOUND = "over_cost_bound"
+    NO_PATH = "no_path"
+
+
+@dataclass(frozen=True, slots=True)
+class BoundedStaticPathResult:
+    path: AgentPath | None
+    status: StaticPathSearchStatus
+    expansions: int = 0
+
+
 def _manhattan_heuristic(row: int, col: int, goal_row: int, goal_col: int) -> int:
     return abs(row - goal_row) + abs(col - goal_col)
 
@@ -46,22 +62,57 @@ def _is_valid_cell(grid_map: GridMap, row: int, col: int) -> bool:
     return grid_map.is_walkable(position)
 
 
-def find_independent_static_path(
+def _is_spatially_reachable(
+    grid_map: GridMap,
+    start_row: int,
+    start_col: int,
+    goal_row: int,
+    goal_col: int,
+) -> bool:
+    if (start_row, start_col) == (goal_row, goal_col):
+        return True
+
+    visited: set[SpatialCell] = {(start_row, start_col)}
+    queue: deque[SpatialCell] = deque([(start_row, start_col)])
+
+    while queue:
+        row, col = queue.popleft()
+        for row_delta, col_delta in _SPATIAL_MOVEMENT_DELTAS:
+            next_row = row + row_delta
+            next_col = col + col_delta
+            if (next_row, next_col) == (goal_row, goal_col):
+                return True
+            if (next_row, next_col) in visited:
+                continue
+            if not _is_valid_cell(grid_map, next_row, next_col):
+                continue
+            visited.add((next_row, next_col))
+            queue.append((next_row, next_col))
+
+    return False
+
+
+def _static_astar(
     grid_map: GridMap,
     agent: MAPFAgent,
-) -> AgentPath | None:
+    *,
+    max_cost: int | None,
+) -> tuple[AgentPath | None, int]:
     start = agent.start
     goal = agent.goal
 
     if not _is_valid_cell(grid_map, start.row, start.col):
-        return None
+        return None, 0
     if not _is_valid_cell(grid_map, goal.row, goal.col):
-        return None
+        return None, 0
 
     if start.row == goal.row and start.col == goal.col:
-        return AgentPath(
-            agent_id=agent.agent_id,
-            states=(TimedState(row=start.row, col=start.col, timestep=0),),
+        return (
+            AgentPath(
+                agent_id=agent.agent_id,
+                states=(TimedState(row=start.row, col=start.col, timestep=0),),
+            ),
+            0,
         )
 
     goal_row = goal.row
@@ -73,19 +124,27 @@ def find_independent_static_path(
     g_score: dict[SpatialCell, int] = {start_cell: 0}
     came_from: dict[SpatialCell, SpatialCell] = {}
     closed: set[SpatialCell] = set()
+    expansions = 0
 
     initial_h = _manhattan_heuristic(start.row, start.col, goal_row, goal_col)
+    if max_cost is not None and initial_h > max_cost:
+        return None, 0
+
     heapq.heappush(open_heap, (initial_h, counter, start.row, start.col))
     counter += 1
 
     while open_heap:
-        _, _, row, col = heapq.heappop(open_heap)
+        f_score, _, row, col = heapq.heappop(open_heap)
         current = (row, col)
+
+        if max_cost is not None and f_score > max_cost:
+            break
 
         if current in closed:
             continue
 
         closed.add(current)
+        expansions += 1
 
         if row == goal_row and col == goal_col:
             spatial_path: list[SpatialCell] = [current]
@@ -99,9 +158,11 @@ def find_independent_static_path(
                 TimedState(row=cell_row, col=cell_col, timestep=timestep)
                 for timestep, (cell_row, cell_col) in enumerate(spatial_path)
             )
-            return AgentPath(agent_id=agent.agent_id, states=states)
+            return AgentPath(agent_id=agent.agent_id, states=states), expansions
 
         current_g = g_score[current]
+        if max_cost is not None and current_g > max_cost:
+            continue
 
         for row_delta, col_delta in _SPATIAL_MOVEMENT_DELTAS:
             next_row = row + row_delta
@@ -115,19 +176,125 @@ def find_independent_static_path(
                 continue
 
             tentative_g = current_g + 1
+            if max_cost is not None and tentative_g > max_cost:
+                continue
+
+            h_score = _manhattan_heuristic(next_row, next_col, goal_row, goal_col)
+            if max_cost is not None and tentative_g + h_score > max_cost:
+                continue
+
             if neighbor not in g_score or tentative_g < g_score[neighbor]:
                 came_from[neighbor] = current
                 g_score[neighbor] = tentative_g
-                f_score = tentative_g + _manhattan_heuristic(
-                    next_row,
-                    next_col,
-                    goal_row,
-                    goal_col,
+                heapq.heappush(
+                    open_heap,
+                    (tentative_g + h_score, counter, next_row, next_col),
                 )
-                heapq.heappush(open_heap, (f_score, counter, next_row, next_col))
                 counter += 1
 
+    return None, expansions
+
+
+def find_independent_static_path_bounded_result(
+    grid_map: GridMap,
+    agent: MAPFAgent,
+    max_cost: int,
+) -> BoundedStaticPathResult:
+    if max_cost < 0:
+        raise ValueError("max_cost must be non-negative")
+
+    start = agent.start
+    goal = agent.goal
+
+    if not _is_valid_cell(grid_map, start.row, start.col):
+        return BoundedStaticPathResult(path=None, status=StaticPathSearchStatus.NO_PATH)
+    if not _is_valid_cell(grid_map, goal.row, goal.col):
+        return BoundedStaticPathResult(path=None, status=StaticPathSearchStatus.NO_PATH)
+
+    if start.row == goal.row and start.col == goal.col:
+        return BoundedStaticPathResult(
+            path=AgentPath(
+                agent_id=agent.agent_id,
+                states=(TimedState(row=start.row, col=start.col, timestep=0),),
+            ),
+            status=StaticPathSearchStatus.SUCCESS,
+            expansions=0,
+        )
+
+    minimum_possible_cost = _manhattan_heuristic(
+        start.row,
+        start.col,
+        goal.row,
+        goal.col,
+    )
+    if minimum_possible_cost > max_cost:
+        if _is_spatially_reachable(
+            grid_map,
+            start.row,
+            start.col,
+            goal.row,
+            goal.col,
+        ):
+            return BoundedStaticPathResult(
+                path=None,
+                status=StaticPathSearchStatus.OVER_COST_BOUND,
+                expansions=0,
+            )
+        return BoundedStaticPathResult(
+            path=None,
+            status=StaticPathSearchStatus.NO_PATH,
+            expansions=0,
+        )
+
+    path, expansions = _static_astar(grid_map, agent, max_cost=max_cost)
+    if path is not None:
+        return BoundedStaticPathResult(
+            path=path,
+            status=StaticPathSearchStatus.SUCCESS,
+            expansions=expansions,
+        )
+
+    if _is_spatially_reachable(
+        grid_map,
+        start.row,
+        start.col,
+        goal.row,
+        goal.col,
+    ):
+        return BoundedStaticPathResult(
+            path=None,
+            status=StaticPathSearchStatus.OVER_COST_BOUND,
+            expansions=expansions,
+        )
+
+    return BoundedStaticPathResult(
+        path=None,
+        status=StaticPathSearchStatus.NO_PATH,
+        expansions=expansions,
+    )
+
+
+def find_independent_static_path_bounded(
+    grid_map: GridMap,
+    agent: MAPFAgent,
+    max_cost: int,
+) -> AgentPath | None:
+    result = find_independent_static_path_bounded_result(
+        grid_map=grid_map,
+        agent=agent,
+        max_cost=max_cost,
+    )
+    if result.status == StaticPathSearchStatus.SUCCESS:
+        return result.path
     return None
+
+
+def find_independent_static_path(
+    grid_map: GridMap,
+    agent: MAPFAgent,
+) -> AgentPath | None:
+    path, _ = _static_astar(grid_map, agent, max_cost=None)
+    return path
 
 
 def independent_path_cost(path: AgentPath | None) -> int | None:

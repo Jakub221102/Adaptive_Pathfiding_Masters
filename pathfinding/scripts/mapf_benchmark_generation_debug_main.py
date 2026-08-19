@@ -172,7 +172,7 @@ def run_debug_experiment() -> None:
     logger.info(f"  PRECOMPUTE_PROGRESS_EVERY: {PRECOMPUTE_PROGRESS_EVERY}")
     logger.info(f"  SAMPLING_PROGRESS_EVERY: {SAMPLING_PROGRESS_EVERY}")
     logger.info("")
-    logger.info("Using static 4-connected independent-path precomputation.")
+    logger.info("Using bounded static 4-connected independent-path precomputation.")
     logger.info("Space-Time A* is NOT used during benchmark source preparation.")
     logger.info("")
 
@@ -184,6 +184,7 @@ def run_debug_experiment() -> None:
 
     original_find_path = benchmark_module.find_path
     original_static_path = static_module.find_independent_static_path
+    original_bounded_static_path = static_module.find_independent_static_path_bounded
     original_evaluate = benchmark_module._evaluate_candidate
 
     def guard_sta_find_path(*_args, **_kwargs):
@@ -245,7 +246,7 @@ def run_debug_experiment() -> None:
     logger.info("")
     logger.info("STATIC PRECOMPUTE COMPLETE")
     logger.info(f"  eligible MovingAI sources: {len(source_pool.eligible_indices)}")
-    logger.info(f"  static spatial paths found: {precompute_result.spatial_paths_found}")
+    logger.info(f"  sources spatially reachable: {precompute_result.spatially_reachable_count}")
     logger.info(f"  within horizon: {len(source_pool.feasible_indices)}")
     logger.info(f"  over horizon: {precompute_result.over_horizon_count}")
     logger.info(f"  no spatial path: {precompute_result.no_spatial_path_count}")
@@ -294,7 +295,7 @@ def run_debug_experiment() -> None:
         _print_histogram(logger, histogram)
         logger.info("")
 
-    def accepted_instance(instance: MAPFBenchmarkInstance) -> None:
+    def accepted_instance(instance: MAPFBenchmarkInstance, attempt: int) -> None:
         accepted_instances.append(instance)
         sampling_elapsed = time.perf_counter() - sampling_start
         logger.info("ACCEPTED")
@@ -307,7 +308,7 @@ def run_debug_experiment() -> None:
         )
         logger.info(f"  Independent SoC: {instance.independent_soc}")
         logger.info(f"  Independent makespan: {instance.independent_makespan}")
-        logger.info(f"  Attempt: {current_attempt}")
+        logger.info(f"  Attempt: {attempt}")
         logger.info(f"  Sampling elapsed: {sampling_elapsed:.3f} s")
         logger.info("")
 
@@ -319,8 +320,14 @@ def run_debug_experiment() -> None:
             "find_independent_static_path must not be called during lookup-only sampling"
         )
 
+    def guard_bounded_static_path(*_args, **_kwargs):
+        raise AssertionError(
+            "find_independent_static_path_bounded must not be called during lookup-only sampling"
+        )
+
     benchmark_module.find_path = guard_find_path
     static_module.find_independent_static_path = guard_static_path
+    static_module.find_independent_static_path_bounded = guard_bounded_static_path
     benchmark_module._evaluate_candidate = tracking_evaluate
     generation_error: ValueError | None = None
     result = None
@@ -343,6 +350,7 @@ def run_debug_experiment() -> None:
     finally:
         benchmark_module.find_path = original_find_path
         static_module.find_independent_static_path = original_static_path
+        static_module.find_independent_static_path_bounded = original_bounded_static_path
         benchmark_module._evaluate_candidate = original_evaluate
 
     sampling_elapsed = time.perf_counter() - sampling_start
