@@ -173,6 +173,7 @@ def run_debug_experiment() -> None:
     logger.info(f"  SAMPLING_PROGRESS_EVERY: {SAMPLING_PROGRESS_EVERY}")
     logger.info("")
     logger.info("Using bounded static 4-connected independent-path precomputation.")
+    logger.info("Connected-component reachability index is built once per map.")
     logger.info("Space-Time A* is NOT used during benchmark source preparation.")
     logger.info("")
 
@@ -185,6 +186,7 @@ def run_debug_experiment() -> None:
     original_find_path = benchmark_module.find_path
     original_static_path = static_module.find_independent_static_path
     original_bounded_static_path = static_module.find_independent_static_path_bounded
+    original_reachability_index = static_module.build_static_reachability_index
     original_evaluate = benchmark_module._evaluate_candidate
 
     def guard_sta_find_path(*_args, **_kwargs):
@@ -222,7 +224,7 @@ def run_debug_experiment() -> None:
 
     def precompute_progress(progress: StaticPrecomputeProgress) -> None:
         elapsed = time.perf_counter() - precompute_start
-        logger.info(f"STATIC PRECOMPUTE {progress.completed} / {progress.total}")
+        logger.info(f"BOUNDED STATIC PRECOMPUTE {progress.completed} / {progress.total}")
         logger.info(f"  elapsed: {elapsed:.1f} s")
         logger.info(f"  feasible: {progress.feasible}")
         logger.info(f"  no spatial path: {progress.no_spatial_path}")
@@ -244,14 +246,28 @@ def run_debug_experiment() -> None:
     precompute_result = source_pool.precompute_result
     precompute_elapsed = time.perf_counter() - precompute_start
     logger.info("")
-    logger.info("STATIC PRECOMPUTE COMPLETE")
+    logger.info("REACHABILITY PREPROCESSING COMPLETE")
+    logger.info(
+        f"  components: {precompute_result.reachability_component_count}"
+    )
+    logger.info(
+        f"  walkable cells: {precompute_result.reachability_walkable_cells}"
+    )
+    logger.info(
+        f"  elapsed: {precompute_result.reachability_preprocess_s:.3f} s"
+    )
+    logger.info("")
+    logger.info("BOUNDED STATIC PRECOMPUTE COMPLETE")
     logger.info(f"  eligible MovingAI sources: {len(source_pool.eligible_indices)}")
     logger.info(f"  sources spatially reachable: {precompute_result.spatially_reachable_count}")
     logger.info(f"  within horizon: {len(source_pool.feasible_indices)}")
     logger.info(f"  over horizon: {precompute_result.over_horizon_count}")
     logger.info(f"  no spatial path: {precompute_result.no_spatial_path_count}")
     logger.info(f"  feasible source pool: {len(source_pool.feasible_indices)}")
-    logger.info(f"  elapsed: {precompute_elapsed:.1f} s")
+    logger.info(
+        f"  bounded precompute elapsed: {precompute_result.bounded_preprocess_s:.1f} s"
+    )
+    logger.info(f"  total source preparation elapsed: {precompute_elapsed:.1f} s")
     if source_pool.eligible_indices:
         logger.info(
             f"  paths/sec: {len(source_pool.eligible_indices) / precompute_elapsed:.1f}"
@@ -325,9 +341,15 @@ def run_debug_experiment() -> None:
             "find_independent_static_path_bounded must not be called during lookup-only sampling"
         )
 
+    def guard_reachability_index(*_args, **_kwargs):
+        raise AssertionError(
+            "build_static_reachability_index must not be called during lookup-only sampling"
+        )
+
     benchmark_module.find_path = guard_find_path
     static_module.find_independent_static_path = guard_static_path
     static_module.find_independent_static_path_bounded = guard_bounded_static_path
+    static_module.build_static_reachability_index = guard_reachability_index
     benchmark_module._evaluate_candidate = tracking_evaluate
     generation_error: ValueError | None = None
     result = None
@@ -351,6 +373,7 @@ def run_debug_experiment() -> None:
         benchmark_module.find_path = original_find_path
         static_module.find_independent_static_path = original_static_path
         static_module.find_independent_static_path_bounded = original_bounded_static_path
+        static_module.build_static_reachability_index = original_reachability_index
         benchmark_module._evaluate_candidate = original_evaluate
 
     sampling_elapsed = time.perf_counter() - sampling_start

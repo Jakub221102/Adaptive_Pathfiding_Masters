@@ -48,6 +48,93 @@ class BoundedStaticPathResult:
     expansions: int = 0
 
 
+@dataclass(frozen=True, slots=True)
+class StaticReachabilityIndex:
+    width: int
+    height: int
+    component_count: int
+    walkable_cell_count: int
+    _component_ids: tuple[int, ...]
+
+    def component_id_at(self, row: int, col: int) -> int | None:
+        if row < 0 or col < 0 or row >= self.height or col >= self.width:
+            return None
+        component_id = self._component_ids[row * self.width + col]
+        if component_id < 0:
+            return None
+        return component_id
+
+
+def build_static_reachability_index(grid_map: GridMap) -> StaticReachabilityIndex:
+    width = grid_map.width
+    height = grid_map.height
+    component_ids = [-1] * (width * height)
+    walkable_cell_count = 0
+    next_component_id = 0
+
+    for row in range(height):
+        for col in range(width):
+            flat_index = row * width + col
+            if component_ids[flat_index] != -1:
+                continue
+
+            position = Position(row=row, col=col)
+            if not grid_map.is_walkable(position):
+                continue
+
+            walkable_cell_count += 1
+            component_ids[flat_index] = next_component_id
+            queue: deque[SpatialCell] = deque([(row, col)])
+
+            while queue:
+                current_row, current_col = queue.popleft()
+                for row_delta, col_delta in _SPATIAL_MOVEMENT_DELTAS:
+                    next_row = current_row + row_delta
+                    next_col = current_col + col_delta
+                    if next_row < 0 or next_col < 0:
+                        continue
+                    if next_row >= height or next_col >= width:
+                        continue
+
+                    next_flat_index = next_row * width + next_col
+                    if component_ids[next_flat_index] != -1:
+                        continue
+
+                    next_position = Position(row=next_row, col=next_col)
+                    if not grid_map.is_walkable(next_position):
+                        continue
+
+                    walkable_cell_count += 1
+                    component_ids[next_flat_index] = next_component_id
+                    queue.append((next_row, next_col))
+
+            next_component_id += 1
+
+    return StaticReachabilityIndex(
+        width=width,
+        height=height,
+        component_count=next_component_id,
+        walkable_cell_count=walkable_cell_count,
+        _component_ids=tuple(component_ids),
+    )
+
+
+def are_spatially_connected(
+    index: StaticReachabilityIndex,
+    start: Position,
+    goal: Position,
+) -> bool:
+    start_component = index.component_id_at(start.row, start.col)
+    if start_component is None:
+        return False
+
+    goal_component = index.component_id_at(goal.row, goal.col)
+    if goal_component is None:
+        return False
+
+    return start_component == goal_component
+
+
 def _manhattan_heuristic(row: int, col: int, goal_row: int, goal_col: int) -> int:
     return abs(row - goal_row) + abs(col - goal_col)
 
@@ -199,6 +286,8 @@ def find_independent_static_path_bounded_result(
     grid_map: GridMap,
     agent: MAPFAgent,
     max_cost: int,
+    *,
+    reachability_index: StaticReachabilityIndex | None = None,
 ) -> BoundedStaticPathResult:
     if max_cost < 0:
         raise ValueError("max_cost must be non-negative")
@@ -210,6 +299,10 @@ def find_independent_static_path_bounded_result(
         return BoundedStaticPathResult(path=None, status=StaticPathSearchStatus.NO_PATH)
     if not _is_valid_cell(grid_map, goal.row, goal.col):
         return BoundedStaticPathResult(path=None, status=StaticPathSearchStatus.NO_PATH)
+
+    if reachability_index is not None:
+        if not are_spatially_connected(reachability_index, start, goal):
+            return BoundedStaticPathResult(path=None, status=StaticPathSearchStatus.NO_PATH)
 
     if start.row == goal.row and start.col == goal.col:
         return BoundedStaticPathResult(
@@ -228,6 +321,12 @@ def find_independent_static_path_bounded_result(
         goal.col,
     )
     if minimum_possible_cost > max_cost:
+        if reachability_index is not None:
+            return BoundedStaticPathResult(
+                path=None,
+                status=StaticPathSearchStatus.OVER_COST_BOUND,
+                expansions=0,
+            )
         if _is_spatially_reachable(
             grid_map,
             start.row,
@@ -251,6 +350,13 @@ def find_independent_static_path_bounded_result(
         return BoundedStaticPathResult(
             path=path,
             status=StaticPathSearchStatus.SUCCESS,
+            expansions=expansions,
+        )
+
+    if reachability_index is not None:
+        return BoundedStaticPathResult(
+            path=None,
+            status=StaticPathSearchStatus.OVER_COST_BOUND,
             expansions=expansions,
         )
 
@@ -278,11 +384,14 @@ def find_independent_static_path_bounded(
     grid_map: GridMap,
     agent: MAPFAgent,
     max_cost: int,
+    *,
+    reachability_index: StaticReachabilityIndex | None = None,
 ) -> AgentPath | None:
     result = find_independent_static_path_bounded_result(
         grid_map=grid_map,
         agent=agent,
         max_cost=max_cost,
+        reachability_index=reachability_index,
     )
     if result.status == StaticPathSearchStatus.SUCCESS:
         return result.path

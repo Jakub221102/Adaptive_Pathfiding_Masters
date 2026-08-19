@@ -280,14 +280,19 @@ def main() -> None:
 
     print()
     print(f"Eligible MovingAI scenarios: {eligible_count}")
-    print("STATIC PRECOMPUTE COMPLETE")
+    print("REACHABILITY PREPROCESSING COMPLETE")
+    print(f"  components: {precompute_result.reachability_component_count}")
+    print(f"  walkable cells: {precompute_result.reachability_walkable_cells}")
+    print(f"  elapsed: {precompute_result.reachability_preprocess_s:.3f} s")
+    print("BOUNDED STATIC PRECOMPUTE COMPLETE")
     print(f"  eligible MovingAI sources: {eligible_count}")
     print(f"  sources spatially reachable: {precompute_result.spatially_reachable_count}")
     print(f"  within horizon: {feasible_count}")
     print(f"  over horizon: {precompute_result.over_horizon_count}")
     print(f"  no spatial path: {precompute_result.no_spatial_path_count}")
     print(f"  feasible source pool: {feasible_count}")
-    print(f"  elapsed: {precompute_time_s:.1f} s")
+    print(f"  bounded precompute elapsed: {precompute_result.bounded_preprocess_s:.1f} s")
+    print(f"  total source preparation elapsed: {precompute_time_s:.1f} s")
     if eligible_count:
         print(f"  paths/sec: {eligible_count / precompute_time_s:.1f}")
 

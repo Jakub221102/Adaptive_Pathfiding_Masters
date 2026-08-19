@@ -10,6 +10,8 @@ from pathfinding.src.experiments.mapf_benchmark_instances import (
 )
 from pathfinding.src.experiments.mapf_independent_static_path import (
     StaticPathSearchStatus,
+    are_spatially_connected,
+    build_static_reachability_index,
     evaluate_candidate_with_independent_paths,
     find_independent_static_path,
     find_independent_static_path_bounded,
@@ -474,3 +476,147 @@ def test_bounded_no_path_on_disconnected_grid() -> None:
     )
     assert result.path is None
     assert result.status == StaticPathSearchStatus.NO_PATH
+
+
+def test_reachability_index_labels_multiple_components() -> None:
+    grid_map = build_grid_map(
+        [
+            [0, 0, 1, 0, 0],
+            [0, 0, 1, 0, 0],
+            [1, 1, 1, 1, 1],
+            [0, 0, 1, 0, 0],
+            [0, 0, 1, 0, 0],
+        ],
+        name="components.map",
+    )
+    index = build_static_reachability_index(grid_map)
+
+    assert index.component_count == 4
+    assert are_spatially_connected(
+        index,
+        Position(row=0, col=0),
+        Position(row=1, col=1),
+    )
+    assert not are_spatially_connected(
+        index,
+        Position(row=0, col=0),
+        Position(row=0, col=3),
+    )
+    assert not are_spatially_connected(
+        index,
+        Position(row=0, col=0),
+        Position(row=4, col=4),
+    )
+
+
+def test_reachability_index_blocked_and_out_of_bounds() -> None:
+    grid_map = build_grid_map(
+        [
+            [0, 1],
+            [0, 0],
+        ],
+        name="blocked.map",
+    )
+    index = build_static_reachability_index(grid_map)
+
+    assert not are_spatially_connected(
+        index,
+        Position(row=0, col=1),
+        Position(row=1, col=1),
+    )
+    assert not are_spatially_connected(
+        index,
+        Position(row=0, col=0),
+        Position(row=0, col=1),
+    )
+    assert not are_spatially_connected(
+        index,
+        Position(row=5, col=0),
+        Position(row=0, col=0),
+    )
+
+
+def test_reachability_index_4_connected_not_diagonal() -> None:
+    grid_map = build_grid_map(
+        [
+            [0, 1],
+            [1, 0],
+        ],
+        name="diagonal_only.map",
+    )
+    index = build_static_reachability_index(grid_map)
+
+    assert index.component_count == 2
+    assert not are_spatially_connected(
+        index,
+        Position(row=0, col=0),
+        Position(row=1, col=1),
+    )
+
+
+def test_reachability_index_is_deterministic() -> None:
+    grid_map = build_grid_map(
+        [
+            [0, 0, 0, 0],
+            [0, 1, 1, 0],
+            [0, 0, 0, 0],
+        ],
+        name="repeat.map",
+    )
+    first = build_static_reachability_index(grid_map)
+    second = build_static_reachability_index(grid_map)
+
+    assert first.component_count == second.component_count
+    assert first.walkable_cell_count == second.walkable_cell_count
+    assert first._component_ids == second._component_ids
+
+
+def test_bounded_with_index_manhattan_over_horizon_skips_astar() -> None:
+    grid_map = build_grid_map(
+        [[0, 0, 0, 0, 0] for _ in range(3)],
+        name="manhattan_index.map",
+    )
+    agent = _agent(1, 0, 1, 4)
+    index = build_static_reachability_index(grid_map)
+
+    import pathfinding.src.experiments.mapf_independent_static_path as static_module
+
+    original_astar = static_module._static_astar
+
+    def raising_astar(*args, **kwargs):
+        raise AssertionError("_static_astar must not run when index proves over bound")
+
+    static_module._static_astar = raising_astar
+    try:
+        result = find_independent_static_path_bounded_result(
+            grid_map,
+            agent,
+            max_cost=3,
+            reachability_index=index,
+        )
+    finally:
+        static_module._static_astar = original_astar
+
+    assert result.status == StaticPathSearchStatus.OVER_COST_BOUND
+    assert result.expansions == 0
+
+
+def test_bounded_with_index_disconnected_large_manhattan_is_no_path() -> None:
+    grid_map = build_grid_map(
+        [
+            [0, 1, 0],
+            [0, 1, 0],
+            [0, 1, 0],
+        ],
+        name="split_large_manhattan.map",
+    )
+    index = build_static_reachability_index(grid_map)
+    result = find_independent_static_path_bounded_result(
+        grid_map,
+        _agent(0, 0, 0, 2),
+        max_cost=1,
+        reachability_index=index,
+    )
+
+    assert result.status == StaticPathSearchStatus.NO_PATH
+    assert result.expansions == 0

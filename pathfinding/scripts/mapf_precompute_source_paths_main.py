@@ -103,6 +103,10 @@ def main() -> None:
     mean_per_path = total_elapsed / len(selected) if selected else 0.0
 
     print()
+    print("REACHABILITY PREPROCESSING COMPLETE")
+    print(f"  components: {result.reachability_component_count}")
+    print(f"  walkable cells: {result.reachability_walkable_cells}")
+    print(f"  elapsed: {result.reachability_preprocess_s:.3f} s")
     print("=" * 60)
     print("PRECOMPUTE SUMMARY")
     print("=" * 60)
@@ -111,6 +115,7 @@ def main() -> None:
     print(f"Failed: {failed}")
     print(f"No spatial path: {result.no_spatial_path_count}")
     print(f"Over horizon: {result.over_horizon_count}")
+    print(f"Bounded precompute runtime: {result.bounded_preprocess_s:.3f} s")
     print(f"Total runtime: {total_elapsed:.3f} s")
     if selected:
         print(f"Mean per scenario: {mean_per_path:.4f} s")

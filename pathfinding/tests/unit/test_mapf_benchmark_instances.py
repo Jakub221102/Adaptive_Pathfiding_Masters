@@ -730,7 +730,13 @@ def test_repeated_precompute_is_deterministic() -> None:
         max_timestep=64,
     )
 
-    assert first == second
+    assert first.paths == second.paths
+    assert first.failed_scenario_indices == second.failed_scenario_indices
+    assert first.no_spatial_path_count == second.no_spatial_path_count
+    assert first.over_horizon_count == second.over_horizon_count
+    assert first.spatially_reachable_count == second.spatially_reachable_count
+    assert first.reachability_component_count == second.reachability_component_count
+    assert first.reachability_walkable_cells == second.reachability_walkable_cells
 
 
 def test_precompute_negative_horizon_raises() -> None:
@@ -820,12 +826,19 @@ def test_sampling_performs_zero_pathfinding_calls_after_precompute() -> None:
             "find_independent_static_path_bounded must not be called during candidate sampling"
         )
 
+    def raising_reachability_index(*args, **kwargs):
+        raise AssertionError(
+            "build_static_reachability_index must not be called during candidate sampling"
+        )
+
     original_find_path = benchmark_module.find_path
     original_static_path = static_module.find_independent_static_path
     original_bounded_static_path = static_module.find_independent_static_path_bounded
+    original_reachability_index = static_module.build_static_reachability_index
     benchmark_module.find_path = raising_find_path
     static_module.find_independent_static_path = raising_static_path
     static_module.find_independent_static_path_bounded = raising_bounded_static_path
+    static_module.build_static_reachability_index = raising_reachability_index
     try:
         result = generate_benchmark_instances_from_precomputed(
             grid_map=grid_map,
@@ -841,6 +854,7 @@ def test_sampling_performs_zero_pathfinding_calls_after_precompute() -> None:
         benchmark_module.find_path = original_find_path
         static_module.find_independent_static_path = original_static_path
         static_module.find_independent_static_path_bounded = original_bounded_static_path
+        static_module.build_static_reachability_index = original_reachability_index
 
     assert len(result.instances) == 3
 
@@ -1212,3 +1226,143 @@ def test_accepted_instance_callback_receives_attempt_number() -> None:
     assert len(attempts_seen) == 3
     assert all(attempt > 0 for attempt in attempts_seen)
     assert max(attempts_seen) <= result.attempts
+
+
+def test_reachability_index_built_once_per_source_pool() -> None:
+    grid_map, scenarios = _build_crossing_scenario_pool()
+    build_calls = 0
+
+    import pathfinding.src.experiments.mapf_independent_static_path as static_module
+
+    original_build = static_module.build_static_reachability_index
+
+    def counting_build(*args, **kwargs):
+        nonlocal build_calls
+        build_calls += 1
+        return original_build(*args, **kwargs)
+
+    static_module.build_static_reachability_index = counting_build
+    try:
+        prepare_benchmark_source_pool(
+            grid_map=grid_map,
+            scenarios=scenarios,
+            min_reference_length=20.0,
+            max_timestep=64,
+        )
+    finally:
+        static_module.build_static_reachability_index = original_build
+
+    assert build_calls == 1
+
+
+def test_manifest_reuse_does_not_rebuild_reachability_index() -> None:
+    grid_map, scenarios = _build_crossing_scenario_pool()
+    build_calls = 0
+
+    import pathfinding.src.experiments.mapf_independent_static_path as static_module
+
+    original_build = static_module.build_static_reachability_index
+
+    def counting_build(*args, **kwargs):
+        nonlocal build_calls
+        build_calls += 1
+        return original_build(*args, **kwargs)
+
+    static_module.build_static_reachability_index = counting_build
+    try:
+        source_pool = prepare_benchmark_source_pool(
+            grid_map=grid_map,
+            scenarios=scenarios,
+            min_reference_length=20.0,
+            max_timestep=64,
+        )
+        generate_benchmark_manifest(
+            grid_map=grid_map,
+            scenarios=scenarios,
+            scenario_name="test.scen",
+            agent_counts=(3, 5),
+            instances_per_level=1,
+            max_timestep=64,
+            seed=1,
+            min_reference_length=20.0,
+            max_attempts=5000,
+            source_pool=source_pool,
+        )
+    finally:
+        static_module.build_static_reachability_index = original_build
+
+    assert build_calls == 1
+
+
+def test_production_precompute_does_not_call_per_source_bfs() -> None:
+    grid_map = build_grid_map(
+        [
+            [0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0],
+            [1, 1, 1, 1, 1],
+            [0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0],
+        ],
+        name="mixed.map",
+    )
+    scenarios = [
+        _scenario(0, 0, 0, 2, optimal_length=25.0, width=5, height=5),
+        _scenario(0, 0, 0, 4, optimal_length=25.0, width=5, height=5),
+        _scenario(0, 0, 4, 4, optimal_length=25.0, width=5, height=5),
+    ]
+
+    import pathfinding.src.experiments.mapf_independent_static_path as static_module
+
+    original_bfs = static_module._is_spatially_reachable
+
+    def raising_bfs(*args, **kwargs):
+        raise AssertionError(
+            "Per-source reachability BFS must not run during production precompute"
+        )
+
+    static_module._is_spatially_reachable = raising_bfs
+    try:
+        result = prepare_benchmark_source_pool(
+            grid_map=grid_map,
+            scenarios=scenarios,
+            min_reference_length=20.0,
+            max_timestep=3,
+        )
+    finally:
+        static_module._is_spatially_reachable = original_bfs
+
+    assert len(result.precompute_result.paths) == 1
+    assert result.precompute_result.paths[0].scenario_index == 0
+    assert result.precompute_result.over_horizon_count == 1
+    assert result.precompute_result.no_spatial_path_count == 1
+
+
+def test_component_index_precompute_classifies_mixed_pool() -> None:
+    grid_map = build_grid_map(
+        [
+            [0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0],
+            [1, 1, 1, 1, 1],
+            [0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0],
+        ],
+        name="mixed.map",
+    )
+    scenarios = [
+        _scenario(0, 0, 0, 2, optimal_length=25.0, width=5, height=5),
+        _scenario(0, 0, 0, 4, optimal_length=25.0, width=5, height=5),
+        _scenario(0, 0, 4, 4, optimal_length=25.0, width=5, height=5),
+    ]
+
+    result = precompute_independent_paths(
+        grid_map=grid_map,
+        scenarios=scenarios,
+        scenario_indices=(0, 1, 2),
+        max_timestep=3,
+    )
+
+    assert [path.scenario_index for path in result.paths] == [0]
+    assert result.over_horizon_count == 1
+    assert result.no_spatial_path_count == 1
+    assert result.spatially_reachable_count == 2
+    assert result.reachability_component_count == 2

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import random
+import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
@@ -90,6 +91,10 @@ class MAPFPrecomputePathsResult:
     no_spatial_path_count: int = 0
     over_horizon_count: int = 0
     spatially_reachable_count: int = 0
+    reachability_component_count: int = 0
+    reachability_walkable_cells: int = 0
+    reachability_preprocess_s: float = 0.0
+    bounded_preprocess_s: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,6 +153,8 @@ def precompute_independent_paths(
 ) -> MAPFPrecomputePathsResult:
     from pathfinding.src.experiments.mapf_independent_static_path import (
         StaticPathSearchStatus,
+        are_spatially_connected,
+        build_static_reachability_index,
         find_independent_static_path_bounded_result,
     )
 
@@ -156,6 +163,11 @@ def precompute_independent_paths(
     if progress_every < 0:
         raise ValueError("progress_every must be non-negative")
 
+    reachability_start = time.perf_counter()
+    reachability_index = build_static_reachability_index(grid_map)
+    reachability_preprocess_s = time.perf_counter() - reachability_start
+
+    bounded_start = time.perf_counter()
     succeeded: list[MAPFPrecomputedSourcePath] = []
     failed: list[int] = []
     total = len(scenario_indices)
@@ -203,10 +215,23 @@ def precompute_independent_paths(
             start=scenario.start,
             goal=scenario.goal,
         )
+        if not are_spatially_connected(
+            reachability_index,
+            scenario.start,
+            scenario.goal,
+        ):
+            planned[scenario_index] = None
+            failed.append(scenario_index)
+            no_spatial_path_count += 1
+            if progress_every > 0 and completed % progress_every == 0:
+                _emit_progress(completed)
+            continue
+
         bounded_result = find_independent_static_path_bounded_result(
             grid_map=grid_map,
             agent=agent,
             max_cost=max_timestep,
+            reachability_index=reachability_index,
         )
         if bounded_result.status == StaticPathSearchStatus.SUCCESS:
             assert bounded_result.path is not None
@@ -234,12 +259,18 @@ def precompute_independent_paths(
     if total > 0:
         _emit_progress(total)
 
+    bounded_preprocess_s = time.perf_counter() - bounded_start
+
     return MAPFPrecomputePathsResult(
         paths=tuple(succeeded),
         failed_scenario_indices=tuple(failed),
         no_spatial_path_count=no_spatial_path_count,
         over_horizon_count=over_horizon_count,
         spatially_reachable_count=spatially_reachable_count,
+        reachability_component_count=reachability_index.component_count,
+        reachability_walkable_cells=reachability_index.walkable_cell_count,
+        reachability_preprocess_s=reachability_preprocess_s,
+        bounded_preprocess_s=bounded_preprocess_s,
     )
 
 
