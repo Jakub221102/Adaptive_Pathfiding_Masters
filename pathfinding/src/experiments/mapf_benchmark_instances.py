@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import json
 import random
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Literal
 
 from pathfinding.src.algorithms.mapf.conflicts import detect_conflicts
 from pathfinding.src.algorithms.mapf.demo_scenario import build_mapf_scenario_from_indices
@@ -76,6 +75,122 @@ class MAPFBenchmarkManifest:
 class MAPFBenchmarkGenerationResult:
     instances: tuple[MAPFBenchmarkInstance, ...]
     attempts: int
+
+
+@dataclass(frozen=True, slots=True)
+class MAPFPrecomputedSourcePath:
+    scenario_index: int
+    states: tuple[TimedState, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class MAPFPrecomputePathsResult:
+    paths: tuple[MAPFPrecomputedSourcePath, ...]
+    failed_scenario_indices: tuple[int, ...]
+
+
+def agent_path_from_precomputed(
+    precomputed: MAPFPrecomputedSourcePath,
+    agent_id: int,
+) -> AgentPath:
+    return AgentPath(agent_id=agent_id, states=precomputed.states)
+
+
+def build_precomputed_path_lookup(
+    paths: Sequence[MAPFPrecomputedSourcePath],
+) -> dict[int, MAPFPrecomputedSourcePath]:
+    lookup: dict[int, MAPFPrecomputedSourcePath] = {}
+    for path in paths:
+        if path.scenario_index in lookup:
+            raise ValueError(
+                f"duplicate precomputed path for scenario_index={path.scenario_index}"
+            )
+        lookup[path.scenario_index] = path
+    return lookup
+
+
+def precompute_independent_paths(
+    grid_map: GridMap,
+    scenarios: Sequence[Scenario],
+    scenario_indices: Sequence[int],
+    *,
+    max_timestep: int,
+    progress_every: int = 0,
+    progress_callback: Callable[[int, int], None] | None = None,
+) -> MAPFPrecomputePathsResult:
+    if max_timestep < 0:
+        raise ValueError("max_timestep must be non-negative")
+    if progress_every < 0:
+        raise ValueError("progress_every must be non-negative")
+
+    succeeded: list[MAPFPrecomputedSourcePath] = []
+    failed: list[int] = []
+    total = len(scenario_indices)
+    planned: dict[int, MAPFPrecomputedSourcePath | None] = {}
+
+    for completed, scenario_index in enumerate(scenario_indices, start=1):
+        if scenario_index in planned:
+            cached = planned[scenario_index]
+            if cached is None:
+                failed.append(scenario_index)
+            else:
+                succeeded.append(cached)
+            if (
+                progress_every > 0
+                and progress_callback is not None
+                and completed % progress_every == 0
+            ):
+                progress_callback(completed, total)
+            continue
+
+        if scenario_index < 0 or scenario_index >= len(scenarios):
+            planned[scenario_index] = None
+            failed.append(scenario_index)
+            if (
+                progress_every > 0
+                and progress_callback is not None
+                and completed % progress_every == 0
+            ):
+                progress_callback(completed, total)
+            continue
+
+        scenario = scenarios[scenario_index]
+        agent = MAPFAgent(
+            agent_id=0,
+            start=scenario.start,
+            goal=scenario.goal,
+        )
+        path = find_path(
+            grid_map=grid_map,
+            agent=agent,
+            max_timestep=max_timestep,
+            constraints=(),
+        )
+        if path is None:
+            planned[scenario_index] = None
+            failed.append(scenario_index)
+        else:
+            precomputed = MAPFPrecomputedSourcePath(
+                scenario_index=scenario_index,
+                states=path.states,
+            )
+            planned[scenario_index] = precomputed
+            succeeded.append(precomputed)
+
+        if (
+            progress_every > 0
+            and progress_callback is not None
+            and completed % progress_every == 0
+        ):
+            progress_callback(completed, total)
+
+    if progress_callback is not None and total > 0:
+        progress_callback(total, total)
+
+    return MAPFPrecomputePathsResult(
+        paths=tuple(succeeded),
+        failed_scenario_indices=tuple(failed),
+    )
 
 
 def classify_interaction_level(conflict_count: int) -> MAPFInteractionLevel:
@@ -189,6 +304,24 @@ def _validate_candidate_indices(
     return True
 
 
+def _plan_independent_paths_from_precomputed(
+    scenario_indices: Sequence[int],
+    precomputed_lookup: Mapping[int, MAPFPrecomputedSourcePath],
+) -> tuple[AgentPath, ...] | None:
+    independent_paths: list[AgentPath] = []
+
+    for agent_id, scenario_index in enumerate(scenario_indices):
+        precomputed = precomputed_lookup.get(scenario_index)
+        if precomputed is None:
+            return None
+
+        independent_paths.append(
+            agent_path_from_precomputed(precomputed, agent_id=agent_id)
+        )
+
+    return tuple(independent_paths)
+
+
 def _plan_cached_independent_paths(
     grid_map: GridMap,
     scenarios: Sequence[Scenario],
@@ -234,17 +367,25 @@ def _evaluate_candidate(
     scenario_indices: Sequence[int],
     max_timestep: int,
     path_cache: dict[int, tuple[TimedState, ...] | None],
+    *,
+    precomputed_lookup: Mapping[int, MAPFPrecomputedSourcePath] | None = None,
 ) -> MAPFBenchmarkInstance | None:
     if not _validate_candidate_indices(scenario_indices, scenarios, grid_map):
         return None
 
-    independent_paths = _plan_cached_independent_paths(
-        grid_map=grid_map,
-        scenarios=scenarios,
-        scenario_indices=scenario_indices,
-        max_timestep=max_timestep,
-        path_cache=path_cache,
-    )
+    if precomputed_lookup is not None:
+        independent_paths = _plan_independent_paths_from_precomputed(
+            scenario_indices=scenario_indices,
+            precomputed_lookup=precomputed_lookup,
+        )
+    else:
+        independent_paths = _plan_cached_independent_paths(
+            grid_map=grid_map,
+            scenarios=scenarios,
+            scenario_indices=scenario_indices,
+            max_timestep=max_timestep,
+            path_cache=path_cache,
+        )
     if independent_paths is None:
         return None
 
@@ -265,6 +406,40 @@ def _evaluate_candidate(
         independent_makespan=makespan(independent_paths),
         vertex_conflict_count=vertex_count,
         edge_conflict_count=edge_count,
+    )
+
+
+def evaluate_benchmark_candidate(
+    grid_map: GridMap,
+    scenarios: Sequence[Scenario],
+    scenario_indices: Sequence[int],
+    max_timestep: int,
+    *,
+    precomputed_lookup: Mapping[int, MAPFPrecomputedSourcePath] | None = None,
+) -> MAPFBenchmarkInstance | None:
+    return _evaluate_candidate(
+        grid_map=grid_map,
+        scenarios=scenarios,
+        scenario_indices=scenario_indices,
+        max_timestep=max_timestep,
+        path_cache={},
+        precomputed_lookup=precomputed_lookup,
+    )
+
+
+def _evaluate_candidate_direct(
+    grid_map: GridMap,
+    scenarios: Sequence[Scenario],
+    scenario_indices: Sequence[int],
+    max_timestep: int,
+) -> MAPFBenchmarkInstance | None:
+    return _evaluate_candidate(
+        grid_map=grid_map,
+        scenarios=scenarios,
+        scenario_indices=scenario_indices,
+        max_timestep=max_timestep,
+        path_cache={},
+        precomputed_lookup=None,
     )
 
 

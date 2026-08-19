@@ -24,10 +24,14 @@ from pathfinding.src.experiments.mapf_benchmark_instances import (
     _eligible_scenario_indices,
     _evaluate_candidate,
     _validate_candidate_indices,
+    agent_path_from_precomputed,
+    build_precomputed_path_lookup,
     classify_interaction_level,
     count_conflicting_agent_pairs,
+    evaluate_benchmark_candidate,
     generate_benchmark_instances,
     load_benchmark_manifest,
+    precompute_independent_paths,
     reconstruct_mapf_scenario_from_instance,
     save_benchmark_manifest,
 )
@@ -567,3 +571,177 @@ def test_instance_ids_contain_agent_count_level_and_sequence() -> None:
         assert "_n03_" in instance.instance_id
         assert instance.interaction_level.value in instance.instance_id
         assert instance.instance_id.endswith("_000")
+
+
+def test_precompute_preserves_input_order() -> None:
+    grid_map, scenarios = _build_crossing_scenario_pool()
+    indices = (3, 7, 11)
+
+    result = precompute_independent_paths(
+        grid_map=grid_map,
+        scenarios=scenarios,
+        scenario_indices=indices,
+        max_timestep=64,
+    )
+
+    assert [path.scenario_index for path in result.paths] == list(indices)
+    assert result.failed_scenario_indices == ()
+
+
+def test_precompute_plans_each_source_scenario_once() -> None:
+    grid_map, scenarios = _build_crossing_scenario_pool()
+    indices = (2, 2, 5)
+    plan_calls = 0
+    original_find_path = find_path
+
+    def counting_find_path(*args, **kwargs):
+        nonlocal plan_calls
+        plan_calls += 1
+        return original_find_path(*args, **kwargs)
+
+    import pathfinding.src.experiments.mapf_benchmark_instances as benchmark_module
+
+    benchmark_module.find_path = counting_find_path
+    try:
+        result = precompute_independent_paths(
+            grid_map=grid_map,
+            scenarios=scenarios,
+            scenario_indices=indices,
+            max_timestep=64,
+        )
+    finally:
+        benchmark_module.find_path = original_find_path
+
+    assert [path.scenario_index for path in result.paths] == [2, 2, 5]
+    assert result.paths[0].states == result.paths[1].states
+    assert plan_calls == 2
+
+
+def test_precomputed_states_reconstruct_with_different_agent_ids() -> None:
+    grid_map, scenarios = _build_crossing_scenario_pool()
+    result = precompute_independent_paths(
+        grid_map=grid_map,
+        scenarios=scenarios,
+        scenario_indices=(4,),
+        max_timestep=64,
+    )
+    precomputed = result.paths[0]
+
+    path_a = agent_path_from_precomputed(precomputed, agent_id=0)
+    path_b = agent_path_from_precomputed(precomputed, agent_id=7)
+
+    assert path_a.states == path_b.states
+    assert path_a.agent_id == 0
+    assert path_b.agent_id == 7
+
+
+def test_precomputed_candidate_evaluation_matches_direct_evaluation() -> None:
+    grid_map, scenarios = _build_crossing_scenario_pool()
+    scenario_indices = (1, 4, 8)
+
+    precomputed = precompute_independent_paths(
+        grid_map=grid_map,
+        scenarios=scenarios,
+        scenario_indices=scenario_indices,
+        max_timestep=64,
+    )
+    lookup = build_precomputed_path_lookup(precomputed.paths)
+
+    direct = evaluate_benchmark_candidate(
+        grid_map=grid_map,
+        scenarios=scenarios,
+        scenario_indices=scenario_indices,
+        max_timestep=64,
+        precomputed_lookup=None,
+    )
+    cached = evaluate_benchmark_candidate(
+        grid_map=grid_map,
+        scenarios=scenarios,
+        scenario_indices=scenario_indices,
+        max_timestep=64,
+        precomputed_lookup=lookup,
+    )
+
+    assert direct is not None
+    assert cached is not None
+    assert direct == cached
+
+
+def test_precomputed_lookup_uses_scenario_index_not_agent_id() -> None:
+    grid_map, scenarios = _build_crossing_scenario_pool()
+    precomputed = precompute_independent_paths(
+        grid_map=grid_map,
+        scenarios=scenarios,
+        scenario_indices=(5, 6),
+        max_timestep=64,
+    )
+    lookup = build_precomputed_path_lookup(precomputed.paths)
+
+    evaluation = evaluate_benchmark_candidate(
+        grid_map=grid_map,
+        scenarios=scenarios,
+        scenario_indices=(6, 5),
+        max_timestep=64,
+        precomputed_lookup=lookup,
+    )
+
+    assert evaluation is not None
+    assert evaluation.scenario_indices == (6, 5)
+
+
+def test_repeated_precompute_is_deterministic() -> None:
+    grid_map, scenarios = _build_crossing_scenario_pool()
+    indices = (1, 3, 5)
+
+    first = precompute_independent_paths(
+        grid_map=grid_map,
+        scenarios=scenarios,
+        scenario_indices=indices,
+        max_timestep=64,
+    )
+    second = precompute_independent_paths(
+        grid_map=grid_map,
+        scenarios=scenarios,
+        scenario_indices=indices,
+        max_timestep=64,
+    )
+
+    assert first == second
+
+
+def test_precompute_negative_horizon_raises() -> None:
+    grid_map, scenarios = _build_crossing_scenario_pool()
+
+    with pytest.raises(ValueError, match="max_timestep must be non-negative"):
+        precompute_independent_paths(
+            grid_map=grid_map,
+            scenarios=scenarios,
+            scenario_indices=(0,),
+            max_timestep=-1,
+        )
+
+
+def test_precompute_records_failed_scenario_indices() -> None:
+    grid_map = build_grid_map(
+        [
+            [0, 0, 0, 0, 0],
+            [1, 1, 1, 1, 1],
+            [0, 0, 0, 0, 0],
+        ],
+        name="blocked.map",
+    )
+    scenarios = [
+        _scenario(0, 0, 2, 4, optimal_length=25.0, width=5, height=3),
+    ]
+
+    result = precompute_independent_paths(
+        grid_map=grid_map,
+        scenarios=scenarios,
+        scenario_indices=(0, 999),
+        max_timestep=2,
+    )
+
+    assert result.paths == ()
+    assert 0 in result.failed_scenario_indices
+    assert 999 in result.failed_scenario_indices
+
