@@ -45,6 +45,9 @@ class CBSStats:
     expanded_cost_distribution: tuple[tuple[int, int], ...]
     classified_conflicts: int
     classification_low_level_searches: int
+    selected_cardinal_conflicts: int
+    selected_semi_cardinal_conflicts: int
+    selected_non_cardinal_conflicts: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,6 +84,9 @@ class _CBSRunTracker:
     max_open_size: int = 0
     classified_conflicts: int = 0
     classification_low_level_searches: int = 0
+    selected_cardinal_conflicts: int = 0
+    selected_semi_cardinal_conflicts: int = 0
+    selected_non_cardinal_conflicts: int = 0
     _seen_constraint_signatures: set[frozenset[Constraint]] | None = None
     _seen_path_signatures: set[tuple[tuple[int, tuple[tuple[int, int, int], ...]], ...]] | None = None
     duplicate_constraint_signatures: int = 0
@@ -121,6 +127,18 @@ class _CBSRunTracker:
         self.classified_conflicts += classified_conflicts
         self.classification_low_level_searches += 2 * classified_conflicts
 
+    def record_selected_cardinality(self, cardinality: object) -> None:
+        from pathfinding.src.algorithms.mapf.cbs_conflict_classification import (
+            ConflictCardinality,
+        )
+
+        if cardinality == ConflictCardinality.CARDINAL:
+            self.selected_cardinal_conflicts += 1
+        elif cardinality == ConflictCardinality.SEMI_CARDINAL:
+            self.selected_semi_cardinal_conflicts += 1
+        elif cardinality == ConflictCardinality.NON_CARDINAL:
+            self.selected_non_cardinal_conflicts += 1
+
     def to_stats(self) -> CBSStats:
         return CBSStats(
             expanded_ct_nodes=self.expanded_ct_nodes,
@@ -135,6 +153,9 @@ class _CBSRunTracker:
             expanded_cost_distribution=_cost_distribution(self.expanded_cost_counts),
             classified_conflicts=self.classified_conflicts,
             classification_low_level_searches=self.classification_low_level_searches,
+            selected_cardinal_conflicts=self.selected_cardinal_conflicts,
+            selected_semi_cardinal_conflicts=self.selected_semi_cardinal_conflicts,
+            selected_non_cardinal_conflicts=self.selected_non_cardinal_conflicts,
         )
 
 
@@ -278,6 +299,9 @@ def _empty_stats() -> CBSStats:
         expanded_cost_distribution=(),
         classified_conflicts=0,
         classification_low_level_searches=0,
+        selected_cardinal_conflicts=0,
+        selected_semi_cardinal_conflicts=0,
+        selected_non_cardinal_conflicts=0,
     )
 
 
@@ -309,6 +333,7 @@ def _expand_node(
     )
     assert selection is not None
     tracker.record_classification(selection.classified_conflicts)
+    tracker.record_selected_cardinality(selection.cardinality)
     return expand_cbs_node_for_conflict(
         grid_map=grid_map,
         scenario=scenario,

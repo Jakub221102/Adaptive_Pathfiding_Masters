@@ -1,0 +1,569 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from pathfinding.src.algorithms.mapf.conflicts import detect_conflicts
+from pathfinding.src.algorithms.mapf.demo_scenario import build_mapf_scenario_from_indices
+from pathfinding.src.algorithms.mapf.metrics import makespan, sum_of_costs
+from pathfinding.src.algorithms.mapf.models import (
+    AgentPath,
+    EdgeConflict,
+    TimedState,
+    VertexConflict,
+)
+from pathfinding.src.algorithms.mapf.space_time_astar import find_path
+from pathfinding.src.core.models import GridMap, Position, Scenario
+from pathfinding.src.experiments.mapf_benchmark_instances import (
+    MAPFBenchmarkInstance,
+    MAPFBenchmarkManifest,
+    MAPFInteractionLevel,
+    _candidate_signature,
+    _eligible_scenario_indices,
+    _evaluate_candidate,
+    _validate_candidate_indices,
+    classify_interaction_level,
+    count_conflicting_agent_pairs,
+    generate_benchmark_instances,
+    load_benchmark_manifest,
+    reconstruct_mapf_scenario_from_instance,
+    save_benchmark_manifest,
+)
+from pathfinding.tests.helpers import build_grid_map
+
+
+def _scenario(
+    start_row: int,
+    start_col: int,
+    goal_row: int,
+    goal_col: int,
+    *,
+    optimal_length: float = 25.0,
+    map_name: str = "test.map",
+    width: int = 20,
+    height: int = 20,
+) -> Scenario:
+    return Scenario(
+        map_name=map_name,
+        width=width,
+        height=height,
+        start=Position(row=start_row, col=start_col),
+        goal=Position(row=goal_row, col=goal_col),
+        optimal_length=optimal_length,
+    )
+
+
+def _open_grid(size: int = 20) -> GridMap:
+    return build_grid_map(
+        [[0 for _ in range(size)] for _ in range(size)],
+        name="bench.map",
+    )
+
+
+def _build_rich_scenario_pool(size: int = 9) -> tuple[GridMap, list[Scenario]]:
+    """Synthetic pool with parallel and crossing paths for all interaction levels."""
+    grid_map = build_grid_map(
+        [[0 for _ in range(size)] for _ in range(size)],
+        name="bench.map",
+    )
+    scenarios: list[Scenario] = []
+    center = size // 2
+
+    for row in range(size):
+        scenarios.append(
+            _scenario(
+                row, 0, row, size - 1,
+                optimal_length=25.0 + row,
+                width=size,
+                height=size,
+            )
+        )
+        scenarios.append(
+            _scenario(
+                row, size - 1, row, 0,
+                optimal_length=26.0 + row,
+                width=size,
+                height=size,
+            )
+        )
+
+    for col in range(size):
+        scenarios.append(
+            _scenario(
+                0, col, size - 1, col,
+                optimal_length=35.0 + col,
+                width=size,
+                height=size,
+            )
+        )
+        scenarios.append(
+            _scenario(
+                size - 1, col, 0, col,
+                optimal_length=36.0 + col,
+                width=size,
+                height=size,
+            )
+        )
+
+    for offset in range(3):
+        scenarios.append(
+            _scenario(
+                0, offset, size - 1, size - 1 - offset,
+                optimal_length=40.0 + offset,
+                width=size,
+                height=size,
+            )
+        )
+        scenarios.append(
+            _scenario(
+                size - 1, offset, 0, size - 1 - offset,
+                optimal_length=45.0 + offset,
+                width=size,
+                height=size,
+            )
+        )
+        scenarios.append(
+            _scenario(
+                offset, 0, size - 1 - offset, size - 1,
+                optimal_length=50.0 + offset,
+                width=size,
+                height=size,
+            )
+        )
+        scenarios.append(
+            _scenario(
+                center,
+                offset,
+                center,
+                size - 1 - offset,
+                optimal_length=55.0 + offset,
+                width=size,
+                height=size,
+            )
+        )
+        scenarios.append(
+            _scenario(
+                offset,
+                center,
+                size - 1 - offset,
+                center,
+                optimal_length=60.0 + offset,
+                width=size,
+                height=size,
+            )
+        )
+
+    return grid_map, scenarios
+
+
+def _build_crossing_scenario_pool(size: int = 20) -> tuple[GridMap, list[Scenario]]:
+    return _build_rich_scenario_pool(size=9)
+
+
+@pytest.mark.parametrize(
+    ("conflict_count", "expected_level"),
+    [
+        (0, MAPFInteractionLevel.LOW),
+        (1, MAPFInteractionLevel.MEDIUM),
+        (2, MAPFInteractionLevel.MEDIUM),
+        (3, MAPFInteractionLevel.HIGH),
+        (7, MAPFInteractionLevel.HIGH),
+    ],
+)
+def test_classify_interaction_level(
+    conflict_count: int,
+    expected_level: MAPFInteractionLevel,
+) -> None:
+    assert classify_interaction_level(conflict_count) == expected_level
+
+
+def test_count_conflicting_agent_pairs_with_multiple_conflicts_per_pair() -> None:
+    conflicts = (
+        VertexConflict(agent1_id=0, agent2_id=3, row=1, col=1, timestep=1),
+        VertexConflict(agent1_id=0, agent2_id=3, row=2, col=2, timestep=2),
+        EdgeConflict(
+            agent1_id=2,
+            agent2_id=7,
+            agent1_from_row=0,
+            agent1_from_col=0,
+            agent1_to_row=0,
+            agent1_to_col=1,
+            agent2_from_row=0,
+            agent2_from_col=1,
+            agent2_to_row=0,
+            agent2_to_col=0,
+            timestep=1,
+        ),
+    )
+
+    assert len(conflicts) == 3
+    assert count_conflicting_agent_pairs(conflicts) == 2
+
+
+def test_candidate_signature_is_order_independent() -> None:
+    assert _candidate_signature((1, 4, 7)) == _candidate_signature((7, 1, 4))
+
+
+def test_deterministic_generation_with_same_seed() -> None:
+    grid_map, scenarios = _build_crossing_scenario_pool()
+
+    result_a = generate_benchmark_instances(
+        grid_map=grid_map,
+        scenarios=scenarios,
+        agent_count=3,
+        instances_per_level=1,
+        max_timestep=64,
+        seed=42,
+        min_reference_length=20.0,
+        max_attempts=5000,
+    )
+    result_b = generate_benchmark_instances(
+        grid_map=grid_map,
+        scenarios=scenarios,
+        agent_count=3,
+        instances_per_level=1,
+        max_timestep=64,
+        seed=42,
+        min_reference_length=20.0,
+        max_attempts=5000,
+    )
+
+    assert result_a.instances == result_b.instances
+
+
+def test_different_seed_can_produce_different_instances() -> None:
+    grid_map, scenarios = _build_crossing_scenario_pool()
+
+    result_a = generate_benchmark_instances(
+        grid_map=grid_map,
+        scenarios=scenarios,
+        agent_count=3,
+        instances_per_level=1,
+        max_timestep=64,
+        seed=1,
+        min_reference_length=20.0,
+        max_attempts=5000,
+    )
+    result_b = generate_benchmark_instances(
+        grid_map=grid_map,
+        scenarios=scenarios,
+        agent_count=3,
+        instances_per_level=1,
+        max_timestep=64,
+        seed=999,
+        min_reference_length=20.0,
+        max_attempts=5000,
+    )
+
+    assert result_a.instances != result_b.instances
+
+
+def test_per_agent_count_seed_independence() -> None:
+    grid_map, scenarios = _build_crossing_scenario_pool()
+    config = {
+        "instances_per_level": 1,
+        "max_timestep": 64,
+        "seed": 2026,
+        "min_reference_length": 20.0,
+        "max_attempts": 5000,
+    }
+
+    only_eight = generate_benchmark_instances(
+        grid_map=grid_map,
+        scenarios=scenarios,
+        agent_count=8,
+        **config,
+    ).instances
+
+    generate_benchmark_instances(
+        grid_map=grid_map,
+        scenarios=scenarios,
+        agent_count=5,
+        **config,
+    )
+    mixed_eight = generate_benchmark_instances(
+        grid_map=grid_map,
+        scenarios=scenarios,
+        agent_count=8,
+        **config,
+    ).instances
+    generate_benchmark_instances(
+        grid_map=grid_map,
+        scenarios=scenarios,
+        agent_count=6,
+        **config,
+    )
+
+    assert only_eight == mixed_eight
+
+
+def test_accepted_instances_have_valid_candidates_and_feasible_paths() -> None:
+    grid_map, scenarios = _build_crossing_scenario_pool()
+
+    result = generate_benchmark_instances(
+        grid_map=grid_map,
+        scenarios=scenarios,
+        agent_count=3,
+        instances_per_level=1,
+        max_timestep=64,
+        seed=7,
+        min_reference_length=20.0,
+        max_attempts=5000,
+    )
+
+    for instance in result.instances:
+        assert len(instance.scenario_indices) == instance.agent_count
+        assert len(set(instance.scenario_indices)) == instance.agent_count
+        assert _validate_candidate_indices(
+            instance.scenario_indices,
+            scenarios,
+            grid_map,
+        )
+
+        selection = build_mapf_scenario_from_indices(
+            scenarios=scenarios,
+            grid_map=grid_map,
+            scenario_indices=instance.scenario_indices,
+        )
+        starts = {
+            (agent.start.row, agent.start.col) for agent in selection.scenario.agents
+        }
+        goals = {
+            (agent.goal.row, agent.goal.col) for agent in selection.scenario.agents
+        }
+        assert len(starts) == instance.agent_count
+        assert len(goals) == instance.agent_count
+
+        for agent in selection.scenario.agents:
+            path = find_path(
+                grid_map=grid_map,
+                agent=agent,
+                max_timestep=64,
+                constraints=(),
+            )
+            assert path is not None
+
+
+def test_agent_ordering_maps_to_zero_based_agent_ids() -> None:
+    grid_map, scenarios = _build_rich_scenario_pool()
+    scenario_indices = (17, 4, 22)
+
+    selection = build_mapf_scenario_from_indices(
+        scenarios=scenarios,
+        grid_map=grid_map,
+        scenario_indices=scenario_indices,
+    )
+
+    assert [spec.agent_id for spec in selection.agents] == [0, 1, 2]
+    assert [spec.scenario_index for spec in selection.agents] == list(scenario_indices)
+
+
+def test_generator_rejects_duplicate_scenario_sets_in_different_order() -> None:
+    grid_map, scenarios = _build_crossing_scenario_pool()
+
+    result = generate_benchmark_instances(
+        grid_map=grid_map,
+        scenarios=scenarios,
+        agent_count=3,
+        instances_per_level=2,
+        max_timestep=64,
+        seed=12345,
+        min_reference_length=20.0,
+        max_attempts=10000,
+    )
+
+    signatures = [
+        _candidate_signature(instance.scenario_indices)
+        for instance in result.instances
+    ]
+    assert len(signatures) == len(set(signatures))
+
+
+def test_stored_interaction_metadata_matches_recomputation() -> None:
+    grid_map, scenarios = _build_crossing_scenario_pool()
+
+    result = generate_benchmark_instances(
+        grid_map=grid_map,
+        scenarios=scenarios,
+        agent_count=3,
+        instances_per_level=1,
+        max_timestep=64,
+        seed=11,
+        min_reference_length=20.0,
+        max_attempts=5000,
+    )
+
+    for instance in result.instances:
+        selection = reconstruct_mapf_scenario_from_instance(
+            scenarios=scenarios,
+            grid_map=grid_map,
+            instance=instance,
+        )
+        independent_paths: list[AgentPath] = []
+        for agent in selection.scenario.agents:
+            path = find_path(
+                grid_map=grid_map,
+                agent=agent,
+                max_timestep=64,
+                constraints=(),
+            )
+            assert path is not None
+            independent_paths.append(path)
+
+        conflicts = detect_conflicts(tuple(independent_paths))
+        vertex_count = sum(
+            1 for conflict in conflicts if isinstance(conflict, VertexConflict)
+        )
+        edge_count = sum(
+            1 for conflict in conflicts if isinstance(conflict, EdgeConflict)
+        )
+
+        assert instance.independent_conflict_count == len(conflicts)
+        assert instance.conflicting_agent_pair_count == count_conflicting_agent_pairs(
+            conflicts
+        )
+        assert instance.vertex_conflict_count == vertex_count
+        assert instance.edge_conflict_count == edge_count
+        assert instance.independent_soc == sum_of_costs(independent_paths)
+        assert instance.independent_makespan == makespan(independent_paths)
+        assert instance.interaction_level == classify_interaction_level(len(conflicts))
+
+
+def test_reference_length_filter_excludes_short_scenarios() -> None:
+    grid_map = _open_grid(10)
+    scenarios = [
+        _scenario(0, 0, 0, 9, optimal_length=5.0),
+        _scenario(1, 0, 1, 9, optimal_length=25.0),
+    ]
+
+    eligible = _eligible_scenario_indices(
+        scenarios=scenarios,
+        grid_map=grid_map,
+        min_reference_length=20.0,
+    )
+
+    assert eligible == (1,)
+
+
+def test_infeasible_independent_path_rejects_candidate() -> None:
+    grid_map = build_grid_map(
+        [
+            [0, 0, 0, 0, 0],
+            [1, 1, 1, 1, 1],
+            [0, 0, 0, 0, 0],
+        ],
+        name="blocked.map",
+    )
+    scenarios = [
+        _scenario(0, 0, 2, 4, optimal_length=25.0, width=5, height=3),
+        _scenario(0, 4, 2, 0, optimal_length=25.0, width=5, height=3),
+    ]
+
+    evaluation = _evaluate_candidate(
+        grid_map=grid_map,
+        scenarios=scenarios,
+        scenario_indices=(0, 1),
+        max_timestep=2,
+        path_cache={},
+    )
+
+    assert evaluation is None
+
+
+def test_insufficient_category_raises_clear_error() -> None:
+    grid_map = _open_grid(30)
+    scenarios = [
+        _scenario(0, 0, 0, 29, optimal_length=30.0, width=30, height=30),
+        _scenario(1, 0, 1, 29, optimal_length=31.0, width=30, height=30),
+        _scenario(2, 0, 2, 29, optimal_length=32.0, width=30, height=30),
+        _scenario(3, 0, 3, 29, optimal_length=33.0, width=30, height=30),
+    ]
+
+    with pytest.raises(ValueError, match="agent_count=2") as error_info:
+        generate_benchmark_instances(
+            grid_map=grid_map,
+            scenarios=scenarios,
+            agent_count=2,
+            instances_per_level=1,
+            max_timestep=64,
+            seed=1,
+            min_reference_length=20.0,
+            max_attempts=200,
+        )
+
+    message = str(error_info.value)
+    assert "found LOW=" in message
+    assert "MEDIUM=0" in message
+    assert "HIGH=0" in message
+    assert "attempts" in message
+
+
+def test_manifest_json_round_trip(tmp_path: Path) -> None:
+    instance = MAPFBenchmarkInstance(
+        instance_id="bench_n03_low_000",
+        agent_count=3,
+        interaction_level=MAPFInteractionLevel.LOW,
+        scenario_indices=(1, 4, 7),
+        independent_conflict_count=0,
+        conflicting_agent_pair_count=0,
+        independent_soc=90,
+        independent_makespan=35,
+        vertex_conflict_count=0,
+        edge_conflict_count=0,
+    )
+    manifest = MAPFBenchmarkManifest(
+        map_name="bench.map",
+        scenario_name="bench.map.scen",
+        seed=2026,
+        max_timestep=512,
+        min_reference_length=20.0,
+        instances=(instance,),
+    )
+
+    output_path = tmp_path / "manifest.json"
+    save_benchmark_manifest(manifest, output_path)
+    loaded = load_benchmark_manifest(output_path)
+
+    assert loaded == manifest
+    assert loaded.instances[0].scenario_indices == (1, 4, 7)
+
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["instances"][0]["scenario_indices"] == [1, 4, 7]
+
+
+def test_negative_max_timestep_raises() -> None:
+    grid_map, scenarios = _build_crossing_scenario_pool()
+
+    with pytest.raises(ValueError, match="max_timestep must be non-negative"):
+        generate_benchmark_instances(
+            grid_map=grid_map,
+            scenarios=scenarios,
+            agent_count=2,
+            instances_per_level=1,
+            max_timestep=-1,
+            seed=1,
+            min_reference_length=20.0,
+            max_attempts=100,
+        )
+
+
+def test_instance_ids_contain_agent_count_level_and_sequence() -> None:
+    grid_map, scenarios = _build_crossing_scenario_pool()
+
+    result = generate_benchmark_instances(
+        grid_map=grid_map,
+        scenarios=scenarios,
+        agent_count=3,
+        instances_per_level=1,
+        max_timestep=64,
+        seed=5,
+        min_reference_length=20.0,
+        max_attempts=5000,
+    )
+
+    for instance in result.instances:
+        assert "_n03_" in instance.instance_id
+        assert instance.interaction_level.value in instance.instance_id
+        assert instance.instance_id.endswith("_000")
