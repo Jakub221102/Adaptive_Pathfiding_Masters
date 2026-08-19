@@ -89,6 +89,21 @@ class MAPFPrecomputePathsResult:
     failed_scenario_indices: tuple[int, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class MAPFBenchmarkSourcePool:
+    eligible_indices: tuple[int, ...]
+    precompute_result: MAPFPrecomputePathsResult
+    precomputed_lookup: dict[int, MAPFPrecomputedSourcePath]
+    feasible_indices: tuple[int, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class MAPFBenchmarkManifestGenerationResult:
+    manifest: MAPFBenchmarkManifest
+    attempts_by_agent_count: dict[int, int]
+    source_pool: MAPFBenchmarkSourcePool
+
+
 def agent_path_from_precomputed(
     precomputed: MAPFPrecomputedSourcePath,
     agent_id: int,
@@ -245,7 +260,7 @@ def _candidate_signature(scenario_indices: Sequence[int]) -> tuple[int, ...]:
     return tuple(sorted(scenario_indices))
 
 
-def _eligible_scenario_indices(
+def eligible_scenario_indices(
     scenarios: Sequence[Scenario],
     grid_map: GridMap,
     min_reference_length: float,
@@ -269,6 +284,61 @@ def _eligible_scenario_indices(
         eligible.append(index)
 
     return tuple(eligible)
+
+
+# Backward-compatible alias for scripts/tests that import the private name.
+_eligible_scenario_indices = eligible_scenario_indices
+
+
+def _feasible_scenario_indices(
+    eligible_indices: Sequence[int],
+    precomputed_lookup: Mapping[int, MAPFPrecomputedSourcePath],
+) -> tuple[int, ...]:
+    return tuple(
+        scenario_index
+        for scenario_index in eligible_indices
+        if scenario_index in precomputed_lookup
+    )
+
+
+def prepare_benchmark_source_pool(
+    grid_map: GridMap,
+    scenarios: Sequence[Scenario],
+    *,
+    min_reference_length: float,
+    max_timestep: int,
+    precompute_progress_every: int = 0,
+    precompute_progress_callback: Callable[[int, int], None] | None = None,
+) -> MAPFBenchmarkSourcePool:
+    if max_timestep < 0:
+        raise ValueError("max_timestep must be non-negative")
+    if min_reference_length < 0:
+        raise ValueError("min_reference_length must be non-negative")
+
+    eligible_indices = eligible_scenario_indices(
+        scenarios=scenarios,
+        grid_map=grid_map,
+        min_reference_length=min_reference_length,
+    )
+    precompute_result = precompute_independent_paths(
+        grid_map=grid_map,
+        scenarios=scenarios,
+        scenario_indices=eligible_indices,
+        max_timestep=max_timestep,
+        progress_every=precompute_progress_every,
+        progress_callback=precompute_progress_callback,
+    )
+    precomputed_lookup = build_precomputed_path_lookup(precompute_result.paths)
+    feasible_indices = _feasible_scenario_indices(
+        eligible_indices=eligible_indices,
+        precomputed_lookup=precomputed_lookup,
+    )
+    return MAPFBenchmarkSourcePool(
+        eligible_indices=eligible_indices,
+        precompute_result=precompute_result,
+        precomputed_lookup=precomputed_lookup,
+        feasible_indices=feasible_indices,
+    )
 
 
 def _validate_candidate_indices(
@@ -443,24 +513,200 @@ def _evaluate_candidate_direct(
     )
 
 
-def _agent_count_seed(base_seed: int, agent_count: int) -> int:
-    return base_seed + agent_count
+def _sample_benchmark_instances(
+    grid_map: GridMap,
+    scenarios: Sequence[Scenario],
+    *,
+    agent_count: int,
+    instances_per_level: int,
+    max_timestep: int,
+    seed: int,
+    max_attempts: int,
+    sample_indices: Sequence[int],
+    precomputed_lookup: Mapping[int, MAPFPrecomputedSourcePath],
+    sampling_progress_every: int = 0,
+    sampling_progress_callback: Callable[
+        [int, int, dict[MAPFInteractionLevel, int], dict[MAPFInteractionLevel, int]],
+        None,
+    ]
+    | None = None,
+    accepted_instance_callback: Callable[[MAPFBenchmarkInstance], None] | None = None,
+) -> MAPFBenchmarkGenerationResult:
+    if agent_count <= 0:
+        raise ValueError("agent_count must be positive")
+    if instances_per_level <= 0:
+        raise ValueError("instances_per_level must be positive")
+    if max_timestep < 0:
+        raise ValueError("max_timestep must be non-negative")
+    if max_attempts <= 0:
+        raise ValueError("max_attempts must be positive")
+    if len(sample_indices) < agent_count:
+        raise ValueError(
+            f"Only {len(sample_indices)} scenarios available for agent_count={agent_count}; "
+            f"need at least {agent_count}."
+        )
 
+    rng = random.Random(_agent_count_seed(seed, agent_count))
+    map_stem = _map_stem(grid_map)
 
-def _count_by_level(
-    instances: Sequence[MAPFBenchmarkInstance],
-) -> dict[MAPFInteractionLevel, int]:
-    counts = {
+    needed = {
+        MAPFInteractionLevel.LOW: instances_per_level,
+        MAPFInteractionLevel.MEDIUM: instances_per_level,
+        MAPFInteractionLevel.HIGH: instances_per_level,
+    }
+    sequence_by_level = {
         MAPFInteractionLevel.LOW: 0,
         MAPFInteractionLevel.MEDIUM: 0,
         MAPFInteractionLevel.HIGH: 0,
     }
-    for instance in instances:
-        counts[instance.interaction_level] += 1
-    return counts
+    accepted_by_level: dict[MAPFInteractionLevel, list[MAPFBenchmarkInstance]] = {
+        MAPFInteractionLevel.LOW: [],
+        MAPFInteractionLevel.MEDIUM: [],
+        MAPFInteractionLevel.HIGH: [],
+    }
+    accepted_signatures: set[tuple[int, ...]] = set()
+    conflict_count_distribution: dict[int, int] = {}
+
+    attempts = 0
+    while attempts < max_attempts and any(count > 0 for count in needed.values()):
+        attempts += 1
+
+        if (
+            sampling_progress_every > 0
+            and sampling_progress_callback is not None
+            and attempts % sampling_progress_every == 0
+        ):
+            found = {
+                level: instances_per_level - needed[level]
+                for level in MAPFInteractionLevel
+            }
+            sampling_progress_callback(
+                attempts,
+                max_attempts,
+                needed,
+                found,
+            )
+
+        sampled_indices = tuple(
+            rng.sample(list(sample_indices), agent_count)
+        )
+        signature = _candidate_signature(sampled_indices)
+        if signature in accepted_signatures:
+            continue
+
+        evaluation = _evaluate_candidate(
+            grid_map=grid_map,
+            scenarios=scenarios,
+            scenario_indices=sampled_indices,
+            max_timestep=max_timestep,
+            path_cache={},
+            precomputed_lookup=precomputed_lookup,
+        )
+        if evaluation is None:
+            continue
+
+        conflict_count_distribution[evaluation.independent_conflict_count] = (
+            conflict_count_distribution.get(evaluation.independent_conflict_count, 0) + 1
+        )
+
+        level = evaluation.interaction_level
+        if needed[level] <= 0:
+            continue
+
+        instance = MAPFBenchmarkInstance(
+            instance_id=_make_instance_id(
+                map_stem=map_stem,
+                agent_count=agent_count,
+                interaction_level=level,
+                sequence=sequence_by_level[level],
+            ),
+            agent_count=evaluation.agent_count,
+            interaction_level=evaluation.interaction_level,
+            scenario_indices=evaluation.scenario_indices,
+            independent_conflict_count=evaluation.independent_conflict_count,
+            conflicting_agent_pair_count=evaluation.conflicting_agent_pair_count,
+            independent_soc=evaluation.independent_soc,
+            independent_makespan=evaluation.independent_makespan,
+            vertex_conflict_count=evaluation.vertex_conflict_count,
+            edge_conflict_count=evaluation.edge_conflict_count,
+        )
+
+        accepted_signatures.add(signature)
+        accepted_by_level[level].append(instance)
+        sequence_by_level[level] += 1
+        needed[level] -= 1
+
+        if accepted_instance_callback is not None:
+            accepted_instance_callback(instance)
+
+    if any(count > 0 for count in needed.values()):
+        found = _count_by_level(
+            [
+                *accepted_by_level[MAPFInteractionLevel.LOW],
+                *accepted_by_level[MAPFInteractionLevel.MEDIUM],
+                *accepted_by_level[MAPFInteractionLevel.HIGH],
+            ]
+        )
+        distribution_text = ", ".join(
+            f"{count}={frequency}"
+            for count, frequency in sorted(conflict_count_distribution.items())
+        )
+        raise ValueError(
+            "Failed to generate requested benchmark instances for "
+            f"agent_count={agent_count}: requested {instances_per_level} per level "
+            f"(LOW/MEDIUM/HIGH); found LOW={found[MAPFInteractionLevel.LOW]}, "
+            f"MEDIUM={found[MAPFInteractionLevel.MEDIUM]}, "
+            f"HIGH={found[MAPFInteractionLevel.HIGH]} after {attempts} attempts. "
+            f"Observed independent conflict-count distribution: "
+            f"{{{distribution_text}}}"
+        )
+
+    ordered_instances = (
+        *accepted_by_level[MAPFInteractionLevel.LOW],
+        *accepted_by_level[MAPFInteractionLevel.MEDIUM],
+        *accepted_by_level[MAPFInteractionLevel.HIGH],
+    )
+    return MAPFBenchmarkGenerationResult(
+        instances=ordered_instances,
+        attempts=attempts,
+    )
 
 
-def generate_benchmark_instances(
+def generate_benchmark_instances_from_precomputed(
+    grid_map: GridMap,
+    scenarios: Sequence[Scenario],
+    *,
+    agent_count: int,
+    instances_per_level: int,
+    max_timestep: int,
+    seed: int,
+    max_attempts: int,
+    source_pool: MAPFBenchmarkSourcePool,
+    sampling_progress_every: int = 0,
+    sampling_progress_callback: Callable[
+        [int, int, dict[MAPFInteractionLevel, int], dict[MAPFInteractionLevel, int]],
+        None,
+    ]
+    | None = None,
+    accepted_instance_callback: Callable[[MAPFBenchmarkInstance], None] | None = None,
+) -> MAPFBenchmarkGenerationResult:
+    return _sample_benchmark_instances(
+        grid_map=grid_map,
+        scenarios=scenarios,
+        agent_count=agent_count,
+        instances_per_level=instances_per_level,
+        max_timestep=max_timestep,
+        seed=seed,
+        max_attempts=max_attempts,
+        sample_indices=source_pool.feasible_indices,
+        precomputed_lookup=source_pool.precomputed_lookup,
+        sampling_progress_every=sampling_progress_every,
+        sampling_progress_callback=sampling_progress_callback,
+        accepted_instance_callback=accepted_instance_callback,
+    )
+
+
+def generate_benchmark_instances_legacy(
     grid_map: GridMap,
     scenarios: Sequence[Scenario],
     *,
@@ -471,18 +717,8 @@ def generate_benchmark_instances(
     min_reference_length: float,
     max_attempts: int,
 ) -> MAPFBenchmarkGenerationResult:
-    if agent_count <= 0:
-        raise ValueError("agent_count must be positive")
-    if instances_per_level <= 0:
-        raise ValueError("instances_per_level must be positive")
-    if max_timestep < 0:
-        raise ValueError("max_timestep must be non-negative")
-    if max_attempts <= 0:
-        raise ValueError("max_attempts must be positive")
-    if min_reference_length < 0:
-        raise ValueError("min_reference_length must be non-negative")
-
-    eligible_indices = _eligible_scenario_indices(
+    """Legacy lazy path-cache sampling for equivalence testing only."""
+    eligible_indices = eligible_scenario_indices(
         scenarios=scenarios,
         grid_map=grid_map,
         min_reference_length=min_reference_length,
@@ -532,6 +768,7 @@ def generate_benchmark_instances(
             scenario_indices=sampled_indices,
             max_timestep=max_timestep,
             path_cache=path_cache,
+            precomputed_lookup=None,
         )
         if evaluation is None:
             continue
@@ -600,6 +837,77 @@ def generate_benchmark_instances(
     )
 
 
+def _agent_count_seed(base_seed: int, agent_count: int) -> int:
+    return base_seed + agent_count
+
+
+def _count_by_level(
+    instances: Sequence[MAPFBenchmarkInstance],
+) -> dict[MAPFInteractionLevel, int]:
+    counts = {
+        MAPFInteractionLevel.LOW: 0,
+        MAPFInteractionLevel.MEDIUM: 0,
+        MAPFInteractionLevel.HIGH: 0,
+    }
+    for instance in instances:
+        counts[instance.interaction_level] += 1
+    return counts
+
+
+def generate_benchmark_instances(
+    grid_map: GridMap,
+    scenarios: Sequence[Scenario],
+    *,
+    agent_count: int,
+    instances_per_level: int,
+    max_timestep: int,
+    seed: int,
+    min_reference_length: float,
+    max_attempts: int,
+    precompute_progress_every: int = 0,
+    precompute_progress_callback: Callable[[int, int], None] | None = None,
+    sampling_progress_every: int = 0,
+    sampling_progress_callback: Callable[
+        [int, int, dict[MAPFInteractionLevel, int], dict[MAPFInteractionLevel, int]],
+        None,
+    ]
+    | None = None,
+    accepted_instance_callback: Callable[[MAPFBenchmarkInstance], None] | None = None,
+) -> MAPFBenchmarkGenerationResult:
+    if agent_count <= 0:
+        raise ValueError("agent_count must be positive")
+    if instances_per_level <= 0:
+        raise ValueError("instances_per_level must be positive")
+    if max_timestep < 0:
+        raise ValueError("max_timestep must be non-negative")
+    if max_attempts <= 0:
+        raise ValueError("max_attempts must be positive")
+    if min_reference_length < 0:
+        raise ValueError("min_reference_length must be non-negative")
+
+    source_pool = prepare_benchmark_source_pool(
+        grid_map=grid_map,
+        scenarios=scenarios,
+        min_reference_length=min_reference_length,
+        max_timestep=max_timestep,
+        precompute_progress_every=precompute_progress_every,
+        precompute_progress_callback=precompute_progress_callback,
+    )
+    return generate_benchmark_instances_from_precomputed(
+        grid_map=grid_map,
+        scenarios=scenarios,
+        agent_count=agent_count,
+        instances_per_level=instances_per_level,
+        max_timestep=max_timestep,
+        seed=seed,
+        max_attempts=max_attempts,
+        source_pool=source_pool,
+        sampling_progress_every=sampling_progress_every,
+        sampling_progress_callback=sampling_progress_callback,
+        accepted_instance_callback=accepted_instance_callback,
+    )
+
+
 def generate_benchmark_manifest(
     grid_map: GridMap,
     scenarios: Sequence[Scenario],
@@ -611,9 +919,30 @@ def generate_benchmark_manifest(
     seed: int,
     min_reference_length: float,
     max_attempts: int,
-) -> tuple[MAPFBenchmarkManifest, dict[int, int]]:
+    source_pool: MAPFBenchmarkSourcePool | None = None,
+    precompute_progress_every: int = 0,
+    precompute_progress_callback: Callable[[int, int], None] | None = None,
+    sampling_progress_every: int = 0,
+    sampling_progress_callback: Callable[
+        [int, int, int, dict[MAPFInteractionLevel, int], dict[MAPFInteractionLevel, int]],
+        None,
+    ]
+    | None = None,
+    accepted_instance_callback: Callable[[MAPFBenchmarkInstance], None] | None = None,
+    generation_start_callback: Callable[[int], None] | None = None,
+) -> MAPFBenchmarkManifestGenerationResult:
     if not agent_counts:
         raise ValueError("agent_counts must not be empty")
+
+    if source_pool is None:
+        source_pool = prepare_benchmark_source_pool(
+            grid_map=grid_map,
+            scenarios=scenarios,
+            min_reference_length=min_reference_length,
+            max_timestep=max_timestep,
+            precompute_progress_every=precompute_progress_every,
+            precompute_progress_callback=precompute_progress_callback,
+        )
 
     all_instances: list[MAPFBenchmarkInstance] = []
     attempts_by_agent_count: dict[int, int] = {}
@@ -622,15 +951,40 @@ def generate_benchmark_manifest(
         if agent_count <= 0:
             raise ValueError("agent_counts must contain only positive values")
 
-        result = generate_benchmark_instances(
+        if generation_start_callback is not None:
+            generation_start_callback(agent_count)
+
+        def _sampling_callback(
+            attempts: int,
+            max_attempts_local: int,
+            needed: dict[MAPFInteractionLevel, int],
+            found: dict[MAPFInteractionLevel, int],
+            *,
+            current_agent_count: int = agent_count,
+        ) -> None:
+            if sampling_progress_callback is not None:
+                sampling_progress_callback(
+                    current_agent_count,
+                    attempts,
+                    max_attempts_local,
+                    needed,
+                    found,
+                )
+
+        result = generate_benchmark_instances_from_precomputed(
             grid_map=grid_map,
             scenarios=scenarios,
             agent_count=agent_count,
             instances_per_level=instances_per_level,
             max_timestep=max_timestep,
             seed=seed,
-            min_reference_length=min_reference_length,
             max_attempts=max_attempts,
+            source_pool=source_pool,
+            sampling_progress_every=sampling_progress_every,
+            sampling_progress_callback=_sampling_callback
+            if sampling_progress_every > 0
+            else None,
+            accepted_instance_callback=accepted_instance_callback,
         )
         all_instances.extend(result.instances)
         attempts_by_agent_count[agent_count] = result.attempts
@@ -643,7 +997,11 @@ def generate_benchmark_manifest(
         min_reference_length=min_reference_length,
         instances=tuple(all_instances),
     )
-    return manifest, attempts_by_agent_count
+    return MAPFBenchmarkManifestGenerationResult(
+        manifest=manifest,
+        attempts_by_agent_count=attempts_by_agent_count,
+        source_pool=source_pool,
+    )
 
 
 def _instance_to_json(instance: MAPFBenchmarkInstance) -> dict[str, object]:

@@ -16,8 +16,10 @@ from pathfinding.src.experiments.mapf_benchmark_instances import (
     INTERACTION_LOW_MAX_CONFLICTS,
     INTERACTION_MEDIUM_MAX_CONFLICTS,
     INTERACTION_MEDIUM_MIN_CONFLICTS,
+    MAPFBenchmarkInstance,
     MAPFInteractionLevel,
     generate_benchmark_manifest,
+    prepare_benchmark_source_pool,
     save_benchmark_manifest,
 )
 from pathfinding.src.loaders.map_loader import load_moving_ai_map
@@ -35,6 +37,8 @@ DEFAULT_SEED = 2026
 DEFAULT_MAX_TIMESTEP = 512
 DEFAULT_MIN_REFERENCE_LENGTH = 20.0
 DEFAULT_MAX_ATTEMPTS = 5000
+DEFAULT_PRECOMPUTE_PROGRESS_EVERY = 250
+DEFAULT_SAMPLING_PROGRESS_EVERY = 1000
 
 
 def parse_args() -> argparse.Namespace:
@@ -91,6 +95,18 @@ def parse_args() -> argparse.Namespace:
         help="Maximum candidate sampling attempts per agent count.",
     )
     parser.add_argument(
+        "--precompute-progress-every",
+        type=int,
+        default=DEFAULT_PRECOMPUTE_PROGRESS_EVERY,
+        help="Print precompute progress every N scenarios (0 disables).",
+    )
+    parser.add_argument(
+        "--sampling-progress-every",
+        type=int,
+        default=DEFAULT_SAMPLING_PROGRESS_EVERY,
+        help="Print sampling progress every N attempts (0 disables).",
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         default=DEFAULT_OUTPUT_PATH,
@@ -133,6 +149,11 @@ def _print_generation_summary(
     manifest,
     attempts_by_agent_count: dict[int, int],
     output_path: Path,
+    *,
+    eligible_count: int,
+    feasible_count: int,
+    failed_count: int,
+    precompute_time_s: float,
 ) -> None:
     print()
     print("=" * 60)
@@ -150,6 +171,10 @@ def _print_generation_summary(
         f"MEDIUM = {INTERACTION_MEDIUM_MIN_CONFLICTS}-{INTERACTION_MEDIUM_MAX_CONFLICTS}, "
         f"HIGH >= {INTERACTION_HIGH_MIN_CONFLICTS}"
     )
+    print(f"Eligible scenarios: {eligible_count}")
+    print(f"Feasible scenarios: {feasible_count}")
+    print(f"Failed precompute: {failed_count}")
+    print(f"Precompute time: {precompute_time_s:.1f} s")
     print(f"Total instances: {len(manifest.instances)}")
     print(f"Output manifest: {output_path}")
     print()
@@ -177,14 +202,78 @@ def _print_generation_summary(
         print()
 
 
+def _print_precompute_progress(completed: int, total: int) -> None:
+    print(f"  {completed} / {total}")
+
+
+def _print_sampling_progress(
+    agent_count: int,
+    attempts: int,
+    max_attempts: int,
+    needed: dict[MAPFInteractionLevel, int],
+    found: dict[MAPFInteractionLevel, int],
+    *,
+    instances_per_level: int,
+) -> None:
+    print(f"Agents: {agent_count}")
+    print(f"Attempt: {attempts} / {max_attempts}")
+    print("Accepted:")
+    for level in MAPFInteractionLevel:
+        print(
+            f"  {level.name:6s}: {found[level]:3d} / {instances_per_level}"
+        )
+
+
+def _print_accepted_instance(instance: MAPFBenchmarkInstance) -> None:
+    print(f"ACCEPTED {instance.instance_id}")
+    print(f"  conflicts={instance.independent_conflict_count}")
+    print(f"  pairs={instance.conflicting_agent_pair_count}")
+    print(f"  SoC={instance.independent_soc}")
+    print(f"  makespan={instance.independent_makespan}")
+
+
 def main() -> None:
     args = parse_args()
 
     grid_map = load_moving_ai_map(args.map)
     scenarios = load_moving_ai_scenarios(args.scen)
 
-    generation_start = time.perf_counter()
-    manifest, attempts_by_agent_count = generate_benchmark_manifest(
+    print("Preparing MAPF benchmark source pool...")
+    print()
+
+    def _precompute_callback(completed: int, total: int) -> None:
+        if args.precompute_progress_every > 0:
+            _print_precompute_progress(completed, total)
+
+    if args.precompute_progress_every > 0:
+        print("Precomputing independent paths:")
+
+    precompute_start = time.perf_counter()
+    source_pool = prepare_benchmark_source_pool(
+        grid_map=grid_map,
+        scenarios=scenarios,
+        min_reference_length=args.min_reference_length,
+        max_timestep=args.max_timestep,
+        precompute_progress_every=args.precompute_progress_every,
+        precompute_progress_callback=_precompute_callback
+        if args.precompute_progress_every > 0
+        else None,
+    )
+    precompute_time_s = time.perf_counter() - precompute_start
+
+    eligible_count = len(source_pool.eligible_indices)
+    feasible_count = len(source_pool.feasible_indices)
+    failed_count = len(source_pool.precompute_result.failed_scenario_indices)
+
+    print()
+    print(f"Eligible MovingAI scenarios: {eligible_count}")
+    print("Precompute complete:")
+    print(f"  feasible: {feasible_count}")
+    print(f"  failed: {failed_count}")
+    print(f"  time: {precompute_time_s:.1f} s")
+
+    sampling_start = time.perf_counter()
+    generation_result = generate_benchmark_manifest(
         grid_map=grid_map,
         scenarios=scenarios,
         scenario_name=args.scen.name,
@@ -194,17 +283,39 @@ def main() -> None:
         seed=args.seed,
         min_reference_length=args.min_reference_length,
         max_attempts=args.max_attempts,
+        source_pool=source_pool,
+        sampling_progress_every=args.sampling_progress_every,
+        sampling_progress_callback=lambda agent_count, attempts, max_attempts, needed, found: _print_sampling_progress(
+            agent_count,
+            attempts,
+            max_attempts,
+            needed,
+            found,
+            instances_per_level=args.instances_per_level,
+        ),
+        accepted_instance_callback=_print_accepted_instance,
+        generation_start_callback=lambda agent_count: print(
+            f"\nGenerating {agent_count}-agent benchmark instances..."
+        ),
     )
-    generation_time_s = time.perf_counter() - generation_start
+    sampling_time_s = time.perf_counter() - sampling_start
 
+    save_start = time.perf_counter()
+    manifest = generation_result.manifest
     save_benchmark_manifest(manifest, args.output)
+    save_time_s = time.perf_counter() - save_start
 
     _print_generation_summary(
         manifest=manifest,
-        attempts_by_agent_count=attempts_by_agent_count,
+        attempts_by_agent_count=generation_result.attempts_by_agent_count,
         output_path=args.output,
+        eligible_count=eligible_count,
+        feasible_count=feasible_count,
+        failed_count=failed_count,
+        precompute_time_s=precompute_time_s,
     )
-    print(f"Generation time: {generation_time_s:.2f} s")
+    print(f"Sampling time: {sampling_time_s:.2f} s")
+    print(f"Manifest save time: {save_time_s:.2f} s")
 
 
 if __name__ == "__main__":
