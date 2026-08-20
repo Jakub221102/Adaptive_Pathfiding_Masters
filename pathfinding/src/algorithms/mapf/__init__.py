@@ -34,7 +34,12 @@ from pathfinding.src.algorithms.mapf.models import (
     VertexConstraint,
 )
 from pathfinding.src.algorithms.mapf.metrics import makespan, sum_of_costs
-from pathfinding.src.algorithms.mapf.prioritized_planning import plan_prioritized
+from pathfinding.src.algorithms.mapf.prioritized_planning import (
+    PrioritizedPlanningRunResult,
+    PrioritizedPlanningStats,
+    plan_prioritized,
+    plan_prioritized_with_stats,
+)
 from pathfinding.src.algorithms.mapf.reservations import build_reservation_constraints
 from pathfinding.src.algorithms.mapf.space_time_astar import find_path
 
@@ -69,6 +74,9 @@ __all__ = [
     "solve_cbs_with_stats",
     "find_path",
     "makespan",
+    "PrioritizedPlanningRunResult",
+    "PrioritizedPlanningStats",
     "plan_prioritized",
+    "plan_prioritized_with_stats",
     "sum_of_costs",
 ]
