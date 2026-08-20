@@ -24,6 +24,7 @@ from pathfinding.src.experiments.mapf_benchmark_execution import (
     TERMINATION_EXPANSION_LIMIT,
     TERMINATION_FAILURE,
     TERMINATION_SUCCESS,
+    TERMINATION_TIME_LIMIT,
     BenchmarkCheckpointStore,
     MAPFBenchmarkAlgorithm,
     MAPFBenchmarkCBSLimits,
@@ -38,6 +39,7 @@ from pathfinding.src.experiments.mapf_benchmark_execution import (
     run_key,
     validate_benchmark_run_record,
 )
+from pathfinding.src.experiments.mapf_cbs_process_runner import terminate_process
 from pathfinding.src.loaders.map_loader import load_moving_ai_map
 from pathfinding.src.loaders.scen_loader import load_moving_ai_scenarios
 
@@ -64,8 +66,14 @@ RESET_RESULTS = False
 SAVE_AFTER_EACH_RUN = True
 STOP_ON_ERROR = False
 
-BASIC_CBS_MAX_EXPANDED_NODES: int | None = 10_000
-CARDINAL_CBS_MAX_EXPANDED_NODES: int | None = 10_000
+# CBS execution guards
+# 180 s: 10-agent MEDIUM successes were ~147–151 s; 120 s is too tight.
+# Difficult 10-agent HIGH cases exceeded 160 s at only 25 CT expansions.
+BASIC_CBS_MAX_EXPANDED_NODES: int | None = 250
+BASIC_CBS_MAX_RUNTIME_SECONDS: float | None = 180.0
+
+CARDINAL_CBS_MAX_EXPANDED_NODES: int | None = 250
+CARDINAL_CBS_MAX_RUNTIME_SECONDS: float | None = 180.0
 
 RESULTS_DIR = _REPO_ROOT / "pathfinding" / "results" / "mapf_benchmark_execution"
 RESULTS_CSV = RESULTS_DIR / "results.csv"
@@ -142,6 +150,12 @@ def _format_limit(value: int | None) -> str:
     return str(value)
 
 
+def _format_runtime_limit(value: float | None) -> str:
+    if value is None:
+        return "unlimited"
+    return f"{value:.1f} s"
+
+
 def _count_by_termination(
     records: Sequence[MAPFBenchmarkRunRecord],
 ) -> dict[str, int]:
@@ -149,6 +163,7 @@ def _count_by_termination(
         TERMINATION_SUCCESS: 0,
         TERMINATION_FAILURE: 0,
         TERMINATION_EXPANSION_LIMIT: 0,
+        TERMINATION_TIME_LIMIT: 0,
         TERMINATION_ERROR: 0,
     }
     for record in records:
@@ -170,6 +185,19 @@ def _print_run_banner(
     logger.info(f"Agents: {entry.instance.agent_count}")
     logger.info(f"Interaction: {entry.instance.interaction_level.name}")
     logger.info(f"Algorithm: {ALGORITHM_LABELS[entry.algorithm]}")
+    if entry.algorithm == MAPFBenchmarkAlgorithm.CBS_BASIC:
+        logger.info(f"Max CT expansions: {_format_limit(BASIC_CBS_MAX_EXPANDED_NODES)}")
+        logger.info(
+            f"Wall-clock limit: {_format_runtime_limit(BASIC_CBS_MAX_RUNTIME_SECONDS)}"
+        )
+    elif entry.algorithm == MAPFBenchmarkAlgorithm.CBS_CARDINAL_FIRST:
+        logger.info(
+            f"Max CT expansions: {_format_limit(CARDINAL_CBS_MAX_EXPANDED_NODES)}"
+        )
+        logger.info(
+            "Wall-clock limit: "
+            f"{_format_runtime_limit(CARDINAL_CBS_MAX_RUNTIME_SECONDS)}"
+        )
     logger.info("=" * 60)
     _log_blank(logger)
 
@@ -227,6 +255,8 @@ def _print_run_result(
             )
     if record.error_message is not None:
         logger.info(f"error_message: {record.error_message}")
+    if record.termination_reason == TERMINATION_TIME_LIMIT:
+        logger.info("CBS worker terminated after wall-clock limit.")
     _log_blank(logger)
 
 
@@ -244,6 +274,7 @@ def _print_global_progress(
         f"Succeeded: {counts[TERMINATION_SUCCESS]} | "
         f"Failed: {counts[TERMINATION_FAILURE]} | "
         f"Expansion-limited: {counts[TERMINATION_EXPANSION_LIMIT]} | "
+        f"Time-limited: {counts[TERMINATION_TIME_LIMIT]} | "
         f"Errors: {counts[TERMINATION_ERROR]} | "
         f"Elapsed total: {timer.elapsed():.1f} s"
     )
@@ -277,9 +308,20 @@ def _print_startup_summary(
     logger.info(f"Save after each run: {SAVE_AFTER_EACH_RUN}")
     logger.info(f"Stop on error: {STOP_ON_ERROR}")
     _log_blank(logger)
-    logger.info("CBS limits:")
-    logger.info(f"  Basic: {_format_limit(BASIC_CBS_MAX_EXPANDED_NODES)}")
-    logger.info(f"  Cardinal-First: {_format_limit(CARDINAL_CBS_MAX_EXPANDED_NODES)}")
+    logger.info("CBS execution guards:")
+    logger.info("  Basic:")
+    logger.info(f"    max CT expansions: {_format_limit(BASIC_CBS_MAX_EXPANDED_NODES)}")
+    logger.info(
+        f"    wall-clock limit: {_format_runtime_limit(BASIC_CBS_MAX_RUNTIME_SECONDS)}"
+    )
+    logger.info("  Cardinal-First:")
+    logger.info(
+        f"    max CT expansions: {_format_limit(CARDINAL_CBS_MAX_EXPANDED_NODES)}"
+    )
+    logger.info(
+        "    wall-clock limit: "
+        f"{_format_runtime_limit(CARDINAL_CBS_MAX_RUNTIME_SECONDS)}"
+    )
     _log_blank(logger)
     logger.info("Execution order:")
     logger.info("  Phase 1: Fixed-Priority PP on all selected instances")
@@ -308,6 +350,7 @@ def _print_completion_summary(
     logger.info(f"Success: {counts[TERMINATION_SUCCESS]}")
     logger.info(f"Failure: {counts[TERMINATION_FAILURE]}")
     logger.info(f"Expansion limit: {counts[TERMINATION_EXPANSION_LIMIT]}")
+    logger.info(f"Time limit: {counts[TERMINATION_TIME_LIMIT]}")
     logger.info(f"Errors: {counts[TERMINATION_ERROR]}")
     _log_blank(logger)
 
@@ -324,6 +367,7 @@ def _print_completion_summary(
             f"success={algorithm_counts[TERMINATION_SUCCESS]}, "
             f"failure={algorithm_counts[TERMINATION_FAILURE]}, "
             f"expansion_limit={algorithm_counts[TERMINATION_EXPANSION_LIMIT]}, "
+            f"time_limit={algorithm_counts[TERMINATION_TIME_LIMIT]}, "
             f"errors={algorithm_counts[TERMINATION_ERROR]}"
         )
 
@@ -415,10 +459,13 @@ def run_benchmark_execution() -> None:
     cbs_limits = MAPFBenchmarkCBSLimits(
         basic_max_expanded_nodes=BASIC_CBS_MAX_EXPANDED_NODES,
         cardinal_first_max_expanded_nodes=CARDINAL_CBS_MAX_EXPANDED_NODES,
+        basic_max_runtime_seconds=BASIC_CBS_MAX_RUNTIME_SECONDS,
+        cardinal_first_max_runtime_seconds=CARDINAL_CBS_MAX_RUNTIME_SECONDS,
     )
 
     completed = 0
     session_records: list[MAPFBenchmarkRunRecord] = list(checkpoint.records.values())
+    active_worker: dict[str, object] = {"process": None}
 
     try:
         for run_number, entry in enumerate(plan, start=1):
@@ -453,6 +500,7 @@ def run_benchmark_execution() -> None:
                     algorithm=entry.algorithm,
                     max_timestep=max_timestep,
                     cbs_limits=cbs_limits,
+                    active_worker=active_worker,
                 )
             except Exception as error:
                 execution_time_ms = (time.perf_counter() - run_start) * 1000.0
@@ -491,6 +539,12 @@ def run_benchmark_execution() -> None:
             )
 
     except KeyboardInterrupt:
+        worker = active_worker.get("process")
+        if worker is not None:
+            from multiprocessing import Process
+
+            if isinstance(worker, Process):
+                terminate_process(worker)
         _print_interrupt_summary(
             logger,
             timer,

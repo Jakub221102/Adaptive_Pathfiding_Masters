@@ -52,6 +52,7 @@ MAIN_BENCHMARK_JSONL = MAIN_BENCHMARK_RESULTS_DIR / "results_details.jsonl"
 TERMINATION_SUCCESS = "success"
 TERMINATION_FAILURE = "failure"
 TERMINATION_EXPANSION_LIMIT = "expansion_limit"
+TERMINATION_TIME_LIMIT = "time_limit"
 TERMINATION_ERROR = "error"
 
 _INTERACTION_ORDER: dict[MAPFInteractionLevel, int] = {
@@ -141,6 +142,8 @@ class MAPFBenchmarkExecutionReport:
 class MAPFBenchmarkCBSLimits:
     basic_max_expanded_nodes: int | None
     cardinal_first_max_expanded_nodes: int | None
+    basic_max_runtime_seconds: float | None = None
+    cardinal_first_max_runtime_seconds: float | None = None
 
 
 def run_key(record: MAPFBenchmarkRunRecord) -> MAPFBenchmarkRunKey:
@@ -379,6 +382,187 @@ def create_error_benchmark_record(
     )
 
 
+def create_time_limit_benchmark_record(
+    *,
+    instance: MAPFBenchmarkInstance,
+    algorithm: MAPFBenchmarkAlgorithm,
+    execution_time_ms: float,
+) -> MAPFBenchmarkRunRecord:
+    return MAPFBenchmarkRunRecord(
+        instance_id=instance.instance_id,
+        algorithm=algorithm,
+        agent_count=instance.agent_count,
+        interaction_level=instance.interaction_level.value,
+        success=False,
+        termination_reason=TERMINATION_TIME_LIMIT,
+        execution_time_ms=execution_time_ms,
+        soc=None,
+        makespan=None,
+        remaining_conflicts=None,
+        independent_soc=instance.independent_soc,
+        independent_makespan=instance.independent_makespan,
+        independent_conflict_count=instance.independent_conflict_count,
+        pp_search_metrics=None,
+        cbs_search_metrics=None,
+        error_message=None,
+    )
+
+
+def _build_cbs_benchmark_record(
+    *,
+    instance: MAPFBenchmarkInstance,
+    algorithm: MAPFBenchmarkAlgorithm,
+    execution_time_ms: float,
+    termination_reason: str,
+    success: bool,
+    soc: int | None,
+    makespan: int | None,
+    cbs_metrics: MAPFCBSSearchMetrics | None,
+    error_message: str | None = None,
+) -> MAPFBenchmarkRunRecord:
+    remaining_conflicts = 0 if success else None
+    return MAPFBenchmarkRunRecord(
+        instance_id=instance.instance_id,
+        algorithm=algorithm,
+        agent_count=instance.agent_count,
+        interaction_level=instance.interaction_level.value,
+        success=success,
+        termination_reason=termination_reason,
+        execution_time_ms=execution_time_ms,
+        soc=soc,
+        makespan=makespan,
+        remaining_conflicts=remaining_conflicts,
+        independent_soc=instance.independent_soc,
+        independent_makespan=instance.independent_makespan,
+        independent_conflict_count=instance.independent_conflict_count,
+        pp_search_metrics=None,
+        cbs_search_metrics=cbs_metrics,
+        error_message=error_message,
+    )
+
+
+def run_cbs_with_wall_clock_limit(
+    *,
+    grid_map: GridMap,
+    scenario: MAPFScenario,
+    instance: MAPFBenchmarkInstance,
+    algorithm: MAPFBenchmarkAlgorithm,
+    max_timestep: int,
+    max_expanded_nodes: int | None,
+    max_runtime_seconds: float | None,
+    active_worker: dict[str, object] | None = None,
+    worker_target: object | None = None,
+) -> MAPFBenchmarkRunRecord:
+    from pathfinding.src.experiments.mapf_cbs_process_runner import (
+        CBSWorkerInput,
+        cbs_worker_main,
+        run_cbs_worker_subprocess,
+    )
+
+    if algorithm not in (
+        MAPFBenchmarkAlgorithm.CBS_BASIC,
+        MAPFBenchmarkAlgorithm.CBS_CARDINAL_FIRST,
+    ):
+        raise ValueError(f"expected CBS algorithm, got {algorithm}")
+
+    if max_runtime_seconds is None:
+        start = time.perf_counter()
+        if algorithm == MAPFBenchmarkAlgorithm.CBS_BASIC:
+            result, termination_reason, cbs_metrics = _run_cbs_basic(
+                grid_map=grid_map,
+                scenario=scenario,
+                max_timestep=max_timestep,
+                max_expanded_nodes=max_expanded_nodes,
+            )
+        else:
+            result, termination_reason, cbs_metrics = _run_cbs_cardinal_first(
+                grid_map=grid_map,
+                scenario=scenario,
+                max_timestep=max_timestep,
+                max_expanded_nodes=max_expanded_nodes,
+            )
+        execution_time_ms = (time.perf_counter() - start) * 1000.0
+        if result is None:
+            return _build_cbs_benchmark_record(
+                instance=instance,
+                algorithm=algorithm,
+                execution_time_ms=execution_time_ms,
+                termination_reason=termination_reason,
+                success=False,
+                soc=None,
+                makespan=None,
+                cbs_metrics=cbs_metrics,
+            )
+        soc, solution_makespan, _ = _quality_from_result(result)
+        return _build_cbs_benchmark_record(
+            instance=instance,
+            algorithm=algorithm,
+            execution_time_ms=execution_time_ms,
+            termination_reason=termination_reason,
+            success=True,
+            soc=soc,
+            makespan=solution_makespan,
+            cbs_metrics=cbs_metrics,
+        )
+
+    worker_input = CBSWorkerInput(
+        grid_map=grid_map,
+        scenario=scenario,
+        algorithm=algorithm.value,
+        max_timestep=max_timestep,
+        max_expanded_nodes=max_expanded_nodes,
+    )
+
+    worker_output, timed_out, execution_time_ms = run_cbs_worker_subprocess(
+        worker_input,
+        max_runtime_seconds=max_runtime_seconds,
+        worker_target=worker_target or cbs_worker_main,
+        active_worker=active_worker,
+    )
+
+    if timed_out:
+        return create_time_limit_benchmark_record(
+            instance=instance,
+            algorithm=algorithm,
+            execution_time_ms=execution_time_ms,
+        )
+
+    if worker_output is None:
+        return create_error_benchmark_record(
+            instance=instance,
+            algorithm=algorithm,
+            execution_time_ms=execution_time_ms,
+            error_message="CBS worker exited without returning a result",
+        )
+
+    if worker_output.termination_reason == TERMINATION_ERROR:
+        message = worker_output.error_message or "CBS worker error"
+        if worker_output.error_traceback:
+            message = f"{message}\n{worker_output.error_traceback}"
+        return _build_cbs_benchmark_record(
+            instance=instance,
+            algorithm=algorithm,
+            execution_time_ms=execution_time_ms,
+            termination_reason=TERMINATION_ERROR,
+            success=False,
+            soc=None,
+            makespan=None,
+            cbs_metrics=worker_output.cbs_search_metrics,
+            error_message=message,
+        )
+
+    return _build_cbs_benchmark_record(
+        instance=instance,
+        algorithm=algorithm,
+        execution_time_ms=execution_time_ms,
+        termination_reason=worker_output.termination_reason,
+        success=worker_output.success,
+        soc=worker_output.soc,
+        makespan=worker_output.makespan,
+        cbs_metrics=worker_output.cbs_search_metrics,
+    )
+
+
 def execute_benchmark_run(
     *,
     grid_map: GridMap,
@@ -387,6 +571,8 @@ def execute_benchmark_run(
     algorithm: MAPFBenchmarkAlgorithm,
     max_timestep: int,
     cbs_limits: MAPFBenchmarkCBSLimits | None = None,
+    active_worker: dict[str, object] | None = None,
+    cbs_worker_target: object | None = None,
 ) -> MAPFBenchmarkRunRecord:
     if max_timestep < 0:
         raise ValueError("max_timestep must be non-negative")
@@ -396,36 +582,38 @@ def execute_benchmark_run(
         cardinal_first_max_expanded_nodes=None,
     )
 
-    start = time.perf_counter()
-
-    pp_metrics: MAPFPPSearchMetrics | None = None
-    cbs_metrics: MAPFCBSSearchMetrics | None = None
-    result: MAPFResult | None = None
-    termination_reason: str
-
-    if algorithm == MAPFBenchmarkAlgorithm.FIXED_PRIORITY_PP:
-        result, termination_reason, pp_metrics = _run_fixed_priority_pp(
+    if algorithm == MAPFBenchmarkAlgorithm.CBS_BASIC:
+        return run_cbs_with_wall_clock_limit(
             grid_map=grid_map,
             scenario=scenario,
-            max_timestep=max_timestep,
-        )
-    elif algorithm == MAPFBenchmarkAlgorithm.CBS_BASIC:
-        result, termination_reason, cbs_metrics = _run_cbs_basic(
-            grid_map=grid_map,
-            scenario=scenario,
+            instance=instance,
+            algorithm=algorithm,
             max_timestep=max_timestep,
             max_expanded_nodes=limits.basic_max_expanded_nodes,
+            max_runtime_seconds=limits.basic_max_runtime_seconds,
+            active_worker=active_worker,
+            worker_target=cbs_worker_target,
         )
-    elif algorithm == MAPFBenchmarkAlgorithm.CBS_CARDINAL_FIRST:
-        result, termination_reason, cbs_metrics = _run_cbs_cardinal_first(
+
+    if algorithm == MAPFBenchmarkAlgorithm.CBS_CARDINAL_FIRST:
+        return run_cbs_with_wall_clock_limit(
             grid_map=grid_map,
             scenario=scenario,
+            instance=instance,
+            algorithm=algorithm,
             max_timestep=max_timestep,
             max_expanded_nodes=limits.cardinal_first_max_expanded_nodes,
+            max_runtime_seconds=limits.cardinal_first_max_runtime_seconds,
+            active_worker=active_worker,
+            worker_target=cbs_worker_target,
         )
-    else:
-        raise ValueError(f"unsupported benchmark algorithm: {algorithm}")
 
+    start = time.perf_counter()
+    result, termination_reason, pp_metrics = _run_fixed_priority_pp(
+        grid_map=grid_map,
+        scenario=scenario,
+        max_timestep=max_timestep,
+    )
     execution_time_ms = (time.perf_counter() - start) * 1000.0
 
     if result is None:
@@ -444,7 +632,7 @@ def execute_benchmark_run(
             independent_makespan=instance.independent_makespan,
             independent_conflict_count=instance.independent_conflict_count,
             pp_search_metrics=pp_metrics,
-            cbs_search_metrics=cbs_metrics,
+            cbs_search_metrics=None,
         )
 
     soc, solution_makespan, conflict_count = _quality_from_result(result)
@@ -464,7 +652,7 @@ def execute_benchmark_run(
         independent_makespan=instance.independent_makespan,
         independent_conflict_count=instance.independent_conflict_count,
         pp_search_metrics=pp_metrics,
-        cbs_search_metrics=cbs_metrics,
+        cbs_search_metrics=None,
     )
 
 
@@ -942,6 +1130,7 @@ def validate_benchmark_run_record(record: MAPFBenchmarkRunRecord) -> None:
         TERMINATION_SUCCESS,
         TERMINATION_FAILURE,
         TERMINATION_EXPANSION_LIMIT,
+        TERMINATION_TIME_LIMIT,
         TERMINATION_ERROR,
     }
     if record.termination_reason not in allowed_terminations:
@@ -994,7 +1183,16 @@ def validate_benchmark_run_record(record: MAPFBenchmarkRunRecord) -> None:
             raise RuntimeError(
                 f"PP run {record.instance_id} must not include CBS metrics"
             )
-    elif record.termination_reason != TERMINATION_ERROR:
+    elif record.termination_reason in {
+        TERMINATION_ERROR,
+        TERMINATION_TIME_LIMIT,
+    }:
+        if record.pp_search_metrics is not None:
+            raise RuntimeError(
+                f"CBS run {record.instance_id} / {record.algorithm.value} "
+                f"must not include PP metrics"
+            )
+    else:
         if record.cbs_search_metrics is None:
             raise RuntimeError(
                 f"CBS run {record.instance_id} / {record.algorithm.value} "
