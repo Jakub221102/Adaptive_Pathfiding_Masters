@@ -1,0 +1,14 @@
+instance_id,algorithm,agent_count,interaction_level,success,termination_reason,execution_time_ms,soc,makespan,remaining_conflicts,independent_soc,independent_makespan,independent_conflict_count,error_message,pp_low_level_searches,pp_agents_planned
+AR0204SR_n05_high_000,fixed_priority_pp,5,high,True,success,3390.0647999253124,1263,352,0,1261,352,4,,5,5
+AR0204SR_n05_high_001,fixed_priority_pp,5,high,True,success,11794.2395999562,1664,458,0,1664,458,3,,5,5
+AR0204SR_n05_high_002,fixed_priority_pp,5,high,True,success,2739.340399974026,1670,408,0,1668,406,3,,5,5
+AR0204SR_n05_low_000,fixed_priority_pp,5,low,True,success,7469.531900016591,1378,379,0,1378,379,0,,5,5
+AR0204SR_n05_low_001,fixed_priority_pp,5,low,True,success,12734.636100009084,868,271,0,868,271,0,,5,5
+AR0204SR_n05_low_002,fixed_priority_pp,5,low,True,success,1967.8667000262067,878,320,0,878,320,0,,5,5
+AR0204SR_n05_medium_000,fixed_priority_pp,5,medium,True,success,3623.2721999986097,1299,398,0,1299,398,1,,5,5
+AR0204SR_n05_medium_001,fixed_priority_pp,5,medium,True,success,9038.989500026219,1291,333,0,1291,333,1,,5,5
+AR0204SR_n05_medium_002,fixed_priority_pp,5,medium,True,success,26427.554800058715,1396,490,0,1396,490,1,,5,5
+AR0204SR_n10_low_000,fixed_priority_pp,10,low,True,success,24448.37150000967,2594,495,0,2594,495,0,,10,10
+AR0204SR_n10_low_001,fixed_priority_pp,10,low,True,success,30351.559299975634,2400,455,0,2400,455,0,,10,10
+AR0204SR_n10_low_002,fixed_priority_pp,10,low,True,success,3810.065899975598,1862,343,0,1862,343,0,,10,10
+AR0204SR_n10_medium_000,fixed_priority_pp,10,medium,True,success,79963.89459993225,2935,497,0,2797,497,2,,10,10

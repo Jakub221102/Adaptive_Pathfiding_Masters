@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
@@ -19,7 +20,6 @@ from pathfinding.src.algorithms.mapf.conflicts import detect_conflicts
 from pathfinding.src.algorithms.mapf.metrics import makespan, sum_of_costs
 from pathfinding.src.algorithms.mapf.models import MAPFResult, MAPFScenario
 from pathfinding.src.algorithms.mapf.prioritized_planning import (
-    PrioritizedPlanningRunResult,
     PrioritizedPlanningStats,
     plan_prioritized_with_stats,
 )
@@ -27,6 +27,7 @@ from pathfinding.src.core.models import GridMap, Scenario
 from pathfinding.src.experiments.mapf_benchmark_instances import (
     MAPFBenchmarkInstance,
     MAPFBenchmarkManifest,
+    MAPFInteractionLevel,
     load_benchmark_manifest,
     reconstruct_mapf_scenario_from_instance,
 )
@@ -43,6 +44,23 @@ DEFAULT_BENCHMARK_ALGORITHMS: tuple[MAPFBenchmarkAlgorithm, ...] = (
     MAPFBenchmarkAlgorithm.CBS_BASIC,
     MAPFBenchmarkAlgorithm.CBS_CARDINAL_FIRST,
 )
+
+TERMINATION_SUCCESS = "success"
+TERMINATION_FAILURE = "failure"
+TERMINATION_EXPANSION_LIMIT = "expansion_limit"
+TERMINATION_ERROR = "error"
+
+_INTERACTION_ORDER: dict[MAPFInteractionLevel, int] = {
+    MAPFInteractionLevel.LOW: 0,
+    MAPFInteractionLevel.MEDIUM: 1,
+    MAPFInteractionLevel.HIGH: 2,
+}
+
+
+@dataclass(frozen=True, slots=True)
+class MAPFBenchmarkRunKey:
+    instance_id: str
+    algorithm: MAPFBenchmarkAlgorithm
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,11 +96,11 @@ class MAPFBenchmarkRunRecord:
 
     success: bool
     termination_reason: str
-    runtime_s: float
+    execution_time_ms: float
 
     soc: int | None
     makespan: int | None
-    conflict_count: int | None
+    remaining_conflicts: int | None
 
     independent_soc: int
     independent_makespan: int
@@ -90,6 +108,17 @@ class MAPFBenchmarkRunRecord:
 
     pp_search_metrics: MAPFPPSearchMetrics | None = None
     cbs_search_metrics: MAPFCBSSearchMetrics | None = None
+    error_message: str | None = None
+
+    @property
+    def runtime_s(self) -> float:
+        return self.execution_time_ms / 1000.0
+
+
+@dataclass(frozen=True, slots=True)
+class MAPFBenchmarkRunPlanEntry:
+    instance: MAPFBenchmarkInstance
+    algorithm: MAPFBenchmarkAlgorithm
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,6 +131,106 @@ class MAPFBenchmarkExecutionReport:
     executed_at_utc: str
     total_runtime_s: float
     runs: tuple[MAPFBenchmarkRunRecord, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class MAPFBenchmarkCBSLimits:
+    basic_max_expanded_nodes: int | None
+    cardinal_first_max_expanded_nodes: int | None
+
+
+def run_key(record: MAPFBenchmarkRunRecord) -> MAPFBenchmarkRunKey:
+    return MAPFBenchmarkRunKey(
+        instance_id=record.instance_id,
+        algorithm=record.algorithm,
+    )
+
+
+def sort_benchmark_instances(
+    instances: Sequence[MAPFBenchmarkInstance],
+) -> tuple[MAPFBenchmarkInstance, ...]:
+    return tuple(
+        sorted(
+            instances,
+            key=lambda instance: (
+                instance.agent_count,
+                _INTERACTION_ORDER[instance.interaction_level],
+                instance.instance_id,
+            ),
+        )
+    )
+
+
+def filter_benchmark_instances(
+    instances: Sequence[MAPFBenchmarkInstance],
+    *,
+    agent_counts: Sequence[int] | None = None,
+    interaction_levels: Sequence[str] | None = None,
+) -> tuple[MAPFBenchmarkInstance, ...]:
+    filtered = list(instances)
+
+    if agent_counts is not None:
+        allowed_counts = set(agent_counts)
+        filtered = [
+            instance
+            for instance in filtered
+            if instance.agent_count in allowed_counts
+        ]
+
+    if interaction_levels is not None:
+        allowed_levels = {level.lower() for level in interaction_levels}
+        filtered = [
+            instance
+            for instance in filtered
+            if instance.interaction_level.value in allowed_levels
+        ]
+
+    return sort_benchmark_instances(filtered)
+
+
+def build_benchmark_run_plan(
+    manifest: MAPFBenchmarkManifest,
+    *,
+    algorithms: Sequence[MAPFBenchmarkAlgorithm] = DEFAULT_BENCHMARK_ALGORITHMS,
+    agent_counts: Sequence[int] | None = None,
+    interaction_levels: Sequence[str] | None = None,
+    run_index_filter: Sequence[int] | None = None,
+) -> tuple[MAPFBenchmarkRunPlanEntry, ...]:
+    """Build deterministic run order: algorithm phases, then sorted instances.
+
+    Phase 1: Fixed-Priority PP on all selected instances
+    Phase 2: Basic CBS on all selected instances
+    Phase 3: Cardinal-First CBS on all selected instances
+
+    Within each phase, instances are ordered by agent_count, interaction level,
+    then instance_id.
+    """
+    if not algorithms:
+        raise ValueError("algorithms must not be empty")
+
+    instances = filter_benchmark_instances(
+        manifest.instances,
+        agent_counts=agent_counts,
+        interaction_levels=interaction_levels,
+    )
+    if not instances:
+        raise ValueError("no benchmark instances matched the selection filters")
+
+    plan: list[MAPFBenchmarkRunPlanEntry] = []
+    for algorithm in algorithms:
+        for instance in instances:
+            plan.append(
+                MAPFBenchmarkRunPlanEntry(instance=instance, algorithm=algorithm)
+            )
+
+    if run_index_filter is not None:
+        selected_indices = set(run_index_filter)
+        plan = [entry for index, entry in enumerate(plan) if index in selected_indices]
+
+    if not plan:
+        raise ValueError("run plan is empty after applying run_index_filter")
+
+    return tuple(plan)
 
 
 def _combined_low_level_searches(stats: CBSStats) -> int:
@@ -175,11 +304,14 @@ def _run_cbs_basic(
     grid_map: GridMap,
     scenario: MAPFScenario,
     max_timestep: int,
+    *,
+    max_expanded_nodes: int | None,
 ) -> tuple[MAPFResult | None, str, MAPFCBSSearchMetrics]:
     run = solve_cbs_with_stats(
         grid_map=grid_map,
         scenario=scenario,
         max_timestep=max_timestep,
+        max_expanded_nodes=max_expanded_nodes,
     )
     return _cbs_run_to_tuple(run)
 
@@ -188,11 +320,14 @@ def _run_cbs_cardinal_first(
     grid_map: GridMap,
     scenario: MAPFScenario,
     max_timestep: int,
+    *,
+    max_expanded_nodes: int | None,
 ) -> tuple[MAPFResult | None, str, MAPFCBSSearchMetrics]:
     run = solve_cbs_cardinal_first_with_stats(
         grid_map=grid_map,
         scenario=scenario,
         max_timestep=max_timestep,
+        max_expanded_nodes=max_expanded_nodes,
     )
     return _cbs_run_to_tuple(run)
 
@@ -215,6 +350,31 @@ def _cbs_run_to_tuple(
     )
 
 
+def create_error_benchmark_record(
+    *,
+    instance: MAPFBenchmarkInstance,
+    algorithm: MAPFBenchmarkAlgorithm,
+    execution_time_ms: float,
+    error_message: str,
+) -> MAPFBenchmarkRunRecord:
+    return MAPFBenchmarkRunRecord(
+        instance_id=instance.instance_id,
+        algorithm=algorithm,
+        agent_count=instance.agent_count,
+        interaction_level=instance.interaction_level.value,
+        success=False,
+        termination_reason=TERMINATION_ERROR,
+        execution_time_ms=execution_time_ms,
+        soc=None,
+        makespan=None,
+        remaining_conflicts=None,
+        independent_soc=instance.independent_soc,
+        independent_makespan=instance.independent_makespan,
+        independent_conflict_count=instance.independent_conflict_count,
+        error_message=error_message,
+    )
+
+
 def execute_benchmark_run(
     *,
     grid_map: GridMap,
@@ -222,9 +382,15 @@ def execute_benchmark_run(
     instance: MAPFBenchmarkInstance,
     algorithm: MAPFBenchmarkAlgorithm,
     max_timestep: int,
+    cbs_limits: MAPFBenchmarkCBSLimits | None = None,
 ) -> MAPFBenchmarkRunRecord:
     if max_timestep < 0:
         raise ValueError("max_timestep must be non-negative")
+
+    limits = cbs_limits or MAPFBenchmarkCBSLimits(
+        basic_max_expanded_nodes=None,
+        cardinal_first_max_expanded_nodes=None,
+    )
 
     start = time.perf_counter()
 
@@ -244,17 +410,19 @@ def execute_benchmark_run(
             grid_map=grid_map,
             scenario=scenario,
             max_timestep=max_timestep,
+            max_expanded_nodes=limits.basic_max_expanded_nodes,
         )
     elif algorithm == MAPFBenchmarkAlgorithm.CBS_CARDINAL_FIRST:
         result, termination_reason, cbs_metrics = _run_cbs_cardinal_first(
             grid_map=grid_map,
             scenario=scenario,
             max_timestep=max_timestep,
+            max_expanded_nodes=limits.cardinal_first_max_expanded_nodes,
         )
     else:
         raise ValueError(f"unsupported benchmark algorithm: {algorithm}")
 
-    runtime_s = time.perf_counter() - start
+    execution_time_ms = (time.perf_counter() - start) * 1000.0
 
     if result is None:
         return MAPFBenchmarkRunRecord(
@@ -264,10 +432,10 @@ def execute_benchmark_run(
             interaction_level=instance.interaction_level.value,
             success=False,
             termination_reason=termination_reason,
-            runtime_s=runtime_s,
+            execution_time_ms=execution_time_ms,
             soc=None,
             makespan=None,
-            conflict_count=None,
+            remaining_conflicts=None,
             independent_soc=instance.independent_soc,
             independent_makespan=instance.independent_makespan,
             independent_conflict_count=instance.independent_conflict_count,
@@ -284,10 +452,10 @@ def execute_benchmark_run(
         interaction_level=instance.interaction_level.value,
         success=True,
         termination_reason=termination_reason,
-        runtime_s=runtime_s,
+        execution_time_ms=execution_time_ms,
         soc=soc,
         makespan=solution_makespan,
-        conflict_count=conflict_count,
+        remaining_conflicts=conflict_count,
         independent_soc=instance.independent_soc,
         independent_makespan=instance.independent_makespan,
         independent_conflict_count=instance.independent_conflict_count,
@@ -303,6 +471,7 @@ def execute_benchmark_suite(
     manifest: MAPFBenchmarkManifest,
     manifest_path: Path,
     algorithms: Sequence[MAPFBenchmarkAlgorithm] = DEFAULT_BENCHMARK_ALGORITHMS,
+    cbs_limits: MAPFBenchmarkCBSLimits | None = None,
     progress_callback: Callable[[MAPFBenchmarkRunRecord, int, int], None] | None = None,
 ) -> MAPFBenchmarkExecutionReport:
     if not algorithms:
@@ -310,29 +479,29 @@ def execute_benchmark_suite(
     if not manifest.instances:
         raise ValueError("manifest must contain at least one instance")
 
+    plan = build_benchmark_run_plan(manifest, algorithms=algorithms)
+
     suite_start = time.perf_counter()
     runs: list[MAPFBenchmarkRunRecord] = []
-    total_runs = len(manifest.instances) * len(algorithms)
-    completed = 0
+    total_runs = len(plan)
 
-    for instance in manifest.instances:
+    for completed, entry in enumerate(plan, start=1):
         scenario = reconstruct_mapf_scenario_from_instance(
             scenarios=scenarios,
             grid_map=grid_map,
-            instance=instance,
+            instance=entry.instance,
         )
-        for algorithm in algorithms:
-            record = execute_benchmark_run(
-                grid_map=grid_map,
-                scenario=scenario,
-                instance=instance,
-                algorithm=algorithm,
-                max_timestep=manifest.max_timestep,
-            )
-            runs.append(record)
-            completed += 1
-            if progress_callback is not None:
-                progress_callback(record, completed, total_runs)
+        record = execute_benchmark_run(
+            grid_map=grid_map,
+            scenario=scenario,
+            instance=entry.instance,
+            algorithm=entry.algorithm,
+            max_timestep=manifest.max_timestep,
+            cbs_limits=cbs_limits,
+        )
+        runs.append(record)
+        if progress_callback is not None:
+            progress_callback(record, completed, total_runs)
 
     return MAPFBenchmarkExecutionReport(
         manifest_path=str(manifest_path),
@@ -352,6 +521,7 @@ def execute_benchmark_manifest_file(
     map_path: Path,
     scen_path: Path,
     algorithms: Sequence[MAPFBenchmarkAlgorithm] = DEFAULT_BENCHMARK_ALGORITHMS,
+    cbs_limits: MAPFBenchmarkCBSLimits | None = None,
     progress_callback: Callable[[MAPFBenchmarkRunRecord, int, int], None] | None = None,
 ) -> MAPFBenchmarkExecutionReport:
     from pathfinding.src.loaders.map_loader import load_moving_ai_map
@@ -373,6 +543,7 @@ def execute_benchmark_manifest_file(
         manifest=manifest,
         manifest_path=manifest_path,
         algorithms=algorithms,
+        cbs_limits=cbs_limits,
         progress_callback=progress_callback,
     )
 
@@ -408,23 +579,26 @@ def _cbs_metrics_to_json(metrics: MAPFCBSSearchMetrics | None) -> dict[str, int]
 
 
 def _run_record_to_json(record: MAPFBenchmarkRunRecord) -> dict[str, object]:
-    return {
+    payload: dict[str, object] = {
         "instance_id": record.instance_id,
         "algorithm": record.algorithm.value,
         "agent_count": record.agent_count,
         "interaction_level": record.interaction_level,
         "success": record.success,
         "termination_reason": record.termination_reason,
-        "runtime_s": record.runtime_s,
+        "execution_time_ms": record.execution_time_ms,
         "soc": record.soc,
         "makespan": record.makespan,
-        "conflict_count": record.conflict_count,
+        "remaining_conflicts": record.remaining_conflicts,
         "independent_soc": record.independent_soc,
         "independent_makespan": record.independent_makespan,
         "independent_conflict_count": record.independent_conflict_count,
         "pp_search_metrics": _pp_metrics_to_json(record.pp_search_metrics),
         "cbs_search_metrics": _cbs_metrics_to_json(record.cbs_search_metrics),
     }
+    if record.error_message is not None:
+        payload["error_message"] = record.error_message
+    return payload
 
 
 def _run_record_from_json(data: dict[str, object]) -> MAPFBenchmarkRunRecord:
@@ -461,7 +635,15 @@ def _run_record_from_json(data: dict[str, object]) -> MAPFBenchmarkRunRecord:
 
     soc_value = data.get("soc")
     makespan_value = data.get("makespan")
-    conflict_count_value = data.get("conflict_count")
+    remaining_conflicts_value = data.get("remaining_conflicts")
+    if remaining_conflicts_value is None and "conflict_count" in data:
+        remaining_conflicts_value = data.get("conflict_count")
+
+    execution_time_ms = data.get("execution_time_ms")
+    if execution_time_ms is None and "runtime_s" in data:
+        execution_time_ms = float(data["runtime_s"]) * 1000.0
+
+    error_message = data.get("error_message")
 
     return MAPFBenchmarkRunRecord(
         instance_id=str(data["instance_id"]),
@@ -470,17 +652,20 @@ def _run_record_from_json(data: dict[str, object]) -> MAPFBenchmarkRunRecord:
         interaction_level=str(data["interaction_level"]),
         success=bool(data["success"]),
         termination_reason=str(data["termination_reason"]),
-        runtime_s=float(data["runtime_s"]),
+        execution_time_ms=float(execution_time_ms),
         soc=None if soc_value is None else int(soc_value),
         makespan=None if makespan_value is None else int(makespan_value),
-        conflict_count=(
-            None if conflict_count_value is None else int(conflict_count_value)
+        remaining_conflicts=(
+            None
+            if remaining_conflicts_value is None
+            else int(remaining_conflicts_value)
         ),
         independent_soc=int(data["independent_soc"]),
         independent_makespan=int(data["independent_makespan"]),
         independent_conflict_count=int(data["independent_conflict_count"]),
         pp_search_metrics=pp_metrics,
         cbs_search_metrics=cbs_metrics,
+        error_message=None if error_message is None else str(error_message),
     )
 
 
@@ -541,6 +726,45 @@ def load_execution_report(path: Path) -> MAPFBenchmarkExecutionReport:
     return _report_from_json(data)
 
 
+def load_checkpoint_records(
+    jsonl_path: Path,
+) -> dict[MAPFBenchmarkRunKey, MAPFBenchmarkRunRecord]:
+    if not jsonl_path.is_file():
+        return {}
+
+    records: dict[MAPFBenchmarkRunKey, MAPFBenchmarkRunRecord] = {}
+    duplicate_keys: list[str] = []
+
+    with jsonl_path.open(encoding="utf-8") as file:
+        for line_number, line in enumerate(file, start=1):
+            stripped = line.strip()
+            if not stripped:
+                continue
+
+            data = json.loads(stripped)
+            if not isinstance(data, dict):
+                raise ValueError(
+                    f"Invalid JSONL record at {jsonl_path}:{line_number}"
+                )
+
+            record = _run_record_from_json(data)
+            key = run_key(record)
+            if key in records:
+                duplicate_keys.append(
+                    f"{key.instance_id} / {key.algorithm.value} (line {line_number})"
+                )
+            records[key] = record
+
+    if duplicate_keys:
+        joined = "\n  - ".join(duplicate_keys)
+        raise RuntimeError(
+            "Duplicate benchmark run keys found in checkpoint file "
+            f"{jsonl_path}:\n  - {joined}"
+        )
+
+    return records
+
+
 def _flatten_run_record(record: MAPFBenchmarkRunRecord) -> dict[str, object]:
     row: dict[str, object] = {
         "instance_id": record.instance_id,
@@ -549,13 +773,14 @@ def _flatten_run_record(record: MAPFBenchmarkRunRecord) -> dict[str, object]:
         "interaction_level": record.interaction_level,
         "success": record.success,
         "termination_reason": record.termination_reason,
-        "runtime_s": record.runtime_s,
+        "execution_time_ms": record.execution_time_ms,
         "soc": record.soc,
         "makespan": record.makespan,
-        "conflict_count": record.conflict_count,
+        "remaining_conflicts": record.remaining_conflicts,
         "independent_soc": record.independent_soc,
         "independent_makespan": record.independent_makespan,
         "independent_conflict_count": record.independent_conflict_count,
+        "error_message": record.error_message,
     }
 
     if record.pp_search_metrics is not None:
@@ -599,80 +824,186 @@ def _flatten_run_record(record: MAPFBenchmarkRunRecord) -> dict[str, object]:
     return row
 
 
-def export_execution_report_csv(
-    report: MAPFBenchmarkExecutionReport,
-    path: Path,
+def rewrite_checkpoint_csv(
+    records: Iterable[MAPFBenchmarkRunRecord],
+    csv_path: Path,
 ) -> None:
-    if not report.runs:
+    rows = [_flatten_run_record(record) for record in records]
+    if not rows:
         return
 
-    rows = [_flatten_run_record(record) for record in report.runs]
     fieldnames: list[str] = []
     for row in rows:
         for key in row:
             if key not in fieldnames:
                 fieldnames.append(key)
 
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="", encoding="utf-8") as file:
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = csv_path.with_suffix(csv_path.suffix + ".tmp")
+    with temp_path.open("w", newline="", encoding="utf-8") as file:
         writer = csv.DictWriter(file, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
+
+    os.replace(temp_path, csv_path)
+
+
+def export_execution_report_csv(
+    report: MAPFBenchmarkExecutionReport,
+    path: Path,
+) -> None:
+    rewrite_checkpoint_csv(report.runs, path)
+
+
+class BenchmarkCheckpointStore:
+    """Append-only JSONL checkpoint store with atomic CSV rewrite."""
+
+    def __init__(
+        self,
+        *,
+        results_dir: Path,
+        csv_path: Path,
+        jsonl_path: Path,
+        reset_results: bool = False,
+    ) -> None:
+        self.results_dir = results_dir
+        self.csv_path = csv_path
+        self.jsonl_path = jsonl_path
+        self.results_dir.mkdir(parents=True, exist_ok=True)
+
+        if reset_results:
+            self.csv_path.unlink(missing_ok=True)
+            self.jsonl_path.unlink(missing_ok=True)
+
+        self._records = load_checkpoint_records(self.jsonl_path)
+
+    @property
+    def records(self) -> dict[MAPFBenchmarkRunKey, MAPFBenchmarkRunRecord]:
+        return dict(self._records)
+
+    def completed_keys(self) -> set[MAPFBenchmarkRunKey]:
+        return set(self._records)
+
+    def append_record(self, record: MAPFBenchmarkRunRecord) -> None:
+        key = run_key(record)
+        if key in self._records:
+            raise RuntimeError(
+                f"Refusing to overwrite existing checkpoint for "
+                f"{key.instance_id} / {key.algorithm.value}"
+            )
+
+        line = json.dumps(_run_record_to_json(record), sort_keys=True)
+        with self.jsonl_path.open("a", encoding="utf-8") as file:
+            file.write(line + "\n")
+            file.flush()
+            os.fsync(file.fileno())
+
+        self._records[key] = record
+        rewrite_checkpoint_csv(self._ordered_records(), self.csv_path)
+
+    def _ordered_records(self) -> tuple[MAPFBenchmarkRunRecord, ...]:
+        return tuple(
+            sorted(
+                self._records.values(),
+                key=lambda record: (
+                    DEFAULT_BENCHMARK_ALGORITHMS.index(record.algorithm)
+                    if record.algorithm in DEFAULT_BENCHMARK_ALGORITHMS
+                    else len(DEFAULT_BENCHMARK_ALGORITHMS),
+                    record.agent_count,
+                    record.interaction_level,
+                    record.instance_id,
+                ),
+            )
+        )
 
 
 def validate_execution_report(report: MAPFBenchmarkExecutionReport) -> None:
     if not report.runs:
         raise RuntimeError("execution report contains no runs")
 
-    seen_keys: set[tuple[str, MAPFBenchmarkAlgorithm]] = set()
+    seen_keys: set[MAPFBenchmarkRunKey] = set()
     for record in report.runs:
-        key = (record.instance_id, record.algorithm)
+        key = run_key(record)
         if key in seen_keys:
             raise RuntimeError(
                 f"duplicate execution record for {record.instance_id} / "
                 f"{record.algorithm.value}"
             )
         seen_keys.add(key)
+        validate_benchmark_run_record(record)
 
-        if record.success:
-            if record.soc is None or record.makespan is None or record.conflict_count is None:
-                raise RuntimeError(
-                    f"successful run {record.instance_id} / "
-                    f"{record.algorithm.value} missing quality metrics"
-                )
-            if record.conflict_count != 0:
-                raise RuntimeError(
-                    f"successful run {record.instance_id} / "
-                    f"{record.algorithm.value} reports conflicts"
-                )
-        else:
-            if (
-                record.soc is not None
-                or record.makespan is not None
-                or record.conflict_count is not None
-            ):
-                raise RuntimeError(
-                    f"failed run {record.instance_id} / "
-                    f"{record.algorithm.value} must not include quality metrics"
-                )
 
-        if record.algorithm == MAPFBenchmarkAlgorithm.FIXED_PRIORITY_PP:
-            if record.pp_search_metrics is None:
-                raise RuntimeError(
-                    f"PP run {record.instance_id} missing search metrics"
-                )
-            if record.cbs_search_metrics is not None:
-                raise RuntimeError(
-                    f"PP run {record.instance_id} must not include CBS metrics"
-                )
-        else:
-            if record.cbs_search_metrics is None:
-                raise RuntimeError(
-                    f"CBS run {record.instance_id} / {record.algorithm.value} "
-                    f"missing search metrics"
-                )
-            if record.pp_search_metrics is not None:
-                raise RuntimeError(
-                    f"CBS run {record.instance_id} / {record.algorithm.value} "
-                    f"must not include PP metrics"
-                )
+def validate_benchmark_run_record(record: MAPFBenchmarkRunRecord) -> None:
+    allowed_terminations = {
+        TERMINATION_SUCCESS,
+        TERMINATION_FAILURE,
+        TERMINATION_EXPANSION_LIMIT,
+        TERMINATION_ERROR,
+    }
+    if record.termination_reason not in allowed_terminations:
+        raise RuntimeError(
+            f"unexpected termination_reason: {record.termination_reason}"
+        )
+
+    if record.success:
+        if record.termination_reason != TERMINATION_SUCCESS:
+            raise RuntimeError(
+                f"successful run {record.instance_id} / "
+                f"{record.algorithm.value} must have termination_reason=success"
+            )
+        if (
+            record.soc is None
+            or record.makespan is None
+            or record.remaining_conflicts is None
+        ):
+            raise RuntimeError(
+                f"successful run {record.instance_id} / "
+                f"{record.algorithm.value} missing quality metrics"
+            )
+        if record.remaining_conflicts != 0:
+            raise RuntimeError(
+                f"successful run {record.instance_id} / "
+                f"{record.algorithm.value} reports remaining conflicts"
+            )
+        if record.error_message is not None:
+            raise RuntimeError(
+                f"successful run {record.instance_id} / "
+                f"{record.algorithm.value} must not include error_message"
+            )
+    else:
+        if (
+            record.soc is not None
+            or record.makespan is not None
+            or record.remaining_conflicts is not None
+        ):
+            raise RuntimeError(
+                f"non-successful run {record.instance_id} / "
+                f"{record.algorithm.value} must not include quality metrics"
+            )
+
+    if record.algorithm == MAPFBenchmarkAlgorithm.FIXED_PRIORITY_PP:
+        if record.pp_search_metrics is None:
+            raise RuntimeError(
+                f"PP run {record.instance_id} missing search metrics"
+            )
+        if record.cbs_search_metrics is not None:
+            raise RuntimeError(
+                f"PP run {record.instance_id} must not include CBS metrics"
+            )
+    elif record.termination_reason != TERMINATION_ERROR:
+        if record.cbs_search_metrics is None:
+            raise RuntimeError(
+                f"CBS run {record.instance_id} / {record.algorithm.value} "
+                f"missing search metrics"
+            )
+        if record.pp_search_metrics is not None:
+            raise RuntimeError(
+                f"CBS run {record.instance_id} / {record.algorithm.value} "
+                f"must not include PP metrics"
+            )
+
+    if record.termination_reason == TERMINATION_ERROR and record.error_message is None:
+        raise RuntimeError(
+            f"error run {record.instance_id} / {record.algorithm.value} "
+            f"missing error_message"
+        )
