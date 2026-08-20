@@ -45,6 +45,10 @@ DEFAULT_BENCHMARK_ALGORITHMS: tuple[MAPFBenchmarkAlgorithm, ...] = (
     MAPFBenchmarkAlgorithm.CBS_CARDINAL_FIRST,
 )
 
+MAIN_BENCHMARK_RESULTS_DIR = Path("pathfinding/results/mapf_benchmark_execution")
+MAIN_BENCHMARK_CSV = MAIN_BENCHMARK_RESULTS_DIR / "results.csv"
+MAIN_BENCHMARK_JSONL = MAIN_BENCHMARK_RESULTS_DIR / "results_details.jsonl"
+
 TERMINATION_SUCCESS = "success"
 TERMINATION_FAILURE = "failure"
 TERMINATION_EXPANSION_LIMIT = "expansion_limit"
