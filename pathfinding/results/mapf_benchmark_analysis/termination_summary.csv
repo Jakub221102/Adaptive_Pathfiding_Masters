@@ -1,0 +1,7 @@
+algorithm,termination_reason,count
+fixed_priority_pp,success,27
+cbs_basic,expansion_limit,1
+cbs_basic,success,22
+cbs_basic,time_limit,4
+cbs_cardinal_first,success,21
+cbs_cardinal_first,time_limit,6

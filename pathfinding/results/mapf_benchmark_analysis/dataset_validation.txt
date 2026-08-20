@@ -1,0 +1,21 @@
+Dataset validation: PASSED
+
+record_count=81 (expected 81)
+unique_instance_count=27 (expected 27)
+duplicate_keys=0
+invalid_algorithms=0
+invalid_termination_reasons=0
+unknown_instance_ids=0
+missing_algorithm_combinations=0
+instances_without_three_algorithms=0
+fixed_priority_pp.success=27 (expected 27)
+cbs_basic.success=22 (expected 22)
+cbs_basic.expansion_limit=1 (expected 1)
+cbs_basic.time_limit=4 (expected 4)
+cbs_cardinal_first.success=21 (expected 21)
+cbs_cardinal_first.time_limit=6 (expected 6)
+overall.success=70 (expected 70)
+overall.expansion_limit=1 (expected 1)
+overall.time_limit=10 (expected 10)
+overall.failure=0 (expected 0)
+overall.error=0 (expected 0)

@@ -1,0 +1,4 @@
+algorithm,total_runs,observed_success_count,observed_success_rate,within_common_budget_success_count,within_common_budget_success_rate,common_budget_ms,comparison_scope,methodology_note
+fixed_priority_pp,27,27,1.0,26,0.9629629629629629,180000.0,secondary_post_hoc,Post-hoc secondary comparison: PP observed success AND execution_time_ms <= 180000; original termination unchanged.
+cbs_basic,27,22,0.8148148148148148,22,0.8148148148148148,180000.0,secondary_post_hoc,CBS runs were executed with an enforced 180 s wall-clock limit; observed success equals within-budget success.
+cbs_cardinal_first,27,21,0.7777777777777778,21,0.7777777777777778,180000.0,secondary_post_hoc,CBS runs were executed with an enforced 180 s wall-clock limit; observed success equals within-budget success.

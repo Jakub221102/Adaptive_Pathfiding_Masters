@@ -1,0 +1,2 @@
+comparison,paired_instance_count,mean_soc_diff,median_soc_diff,std_soc_diff,mean_makespan_diff,median_makespan_diff,std_makespan_diff,left_better_soc_count,right_better_soc_count,equal_soc_count,soc_diff_column,makespan_diff_column,soc_diff_interpretation
+pp_minus_cardinal,21,6.761904761904762,0.0,30.07641062677653,0.09523809523809523,0.0,0.4364357804719848,0,3,18,pp_minus_cardinal_soc,pp_minus_cardinal_makespan,Positive pp_minus_cardinal_soc means the right-hand algorithm achieved lower SoC.

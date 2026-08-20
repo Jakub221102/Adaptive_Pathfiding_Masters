@@ -1,0 +1,12 @@
+instance_id,algorithm,agent_count,interaction_level,independent_conflict_count,termination_reason,execution_time_ms,error_message,cbs_expanded_ct_nodes,cbs_generated_ct_nodes,cbs_low_level_replans,cbs_combined_low_level_searches
+AR0204SR_n10_high_000,cbs_basic,10,high,10,time_limit,180169.44490000606,,,,,
+AR0204SR_n10_high_002,cbs_basic,10,high,4,time_limit,180169.6509999456,,,,,
+AR0204SR_n20_high_000,cbs_basic,20,high,49,expansion_limit,129417.753500049,,250,501,500,500
+AR0204SR_n20_high_001,cbs_basic,20,high,10,time_limit,180174.3875000393,,,,,
+AR0204SR_n20_high_002,cbs_basic,20,high,3,time_limit,180181.89419992268,,,,,
+AR0204SR_n10_high_000,cbs_cardinal_first,10,high,10,time_limit,180179.60869998205,,,,,
+AR0204SR_n10_high_001,cbs_cardinal_first,10,high,3,time_limit,180187.4052999774,,,,,
+AR0204SR_n10_high_002,cbs_cardinal_first,10,high,4,time_limit,180173.39819995686,,,,,
+AR0204SR_n20_high_000,cbs_cardinal_first,20,high,49,time_limit,180419.57989998627,,,,,
+AR0204SR_n20_high_001,cbs_cardinal_first,20,high,10,time_limit,180179.6645000577,,,,,
+AR0204SR_n20_high_002,cbs_cardinal_first,20,high,3,time_limit,180175.52940000314,,,,,

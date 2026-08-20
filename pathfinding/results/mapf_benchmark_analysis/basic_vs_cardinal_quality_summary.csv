@@ -1,0 +1,2 @@
+comparison,paired_instance_count,mean_soc_diff,median_soc_diff,std_soc_diff,mean_makespan_diff,median_makespan_diff,std_makespan_diff,left_better_soc_count,right_better_soc_count,equal_soc_count,soc_diff_column,makespan_diff_column,soc_diff_interpretation
+basic_minus_cardinal,21,0.0,0.0,0.0,0.0,0.0,0.0,0,0,21,basic_minus_cardinal_soc,basic_minus_cardinal_makespan,Positive basic_minus_cardinal_soc means the right-hand algorithm achieved lower SoC.
