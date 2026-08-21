@@ -163,6 +163,42 @@ def build_conflict_aware_ordering_inputs(
     )
 
 
+def reorder_scenario_from_conflict_aware_inputs(
+    scenario: MAPFScenario,
+    inputs: ConflictAwareOrderingInputs,
+    *,
+    sort_key: Callable[[int, ConflictAwareOrderingInputs], tuple[int, ...]],
+) -> MAPFScenario:
+    ranked_indices = sorted(
+        range(len(scenario.agents)),
+        key=lambda original_index: sort_key(original_index, inputs),
+    )
+    return MAPFScenario(
+        agents=tuple(scenario.agents[index] for index in ranked_indices)
+    )
+
+
+def cdf_h_sort_key(
+    index: int,
+    inputs: ConflictAwareOrderingInputs,
+) -> tuple[int, ...]:
+    return (-inputs.degrees[index], inputs.independent_costs[index], index)
+
+
+def cdf_l_sort_key(
+    index: int,
+    inputs: ConflictAwareOrderingInputs,
+) -> tuple[int, ...]:
+    return (inputs.degrees[index], inputs.independent_costs[index], index)
+
+
+def spf_cd_sort_key(
+    index: int,
+    inputs: ConflictAwareOrderingInputs,
+) -> tuple[int, ...]:
+    return (inputs.independent_costs[index], -inputs.degrees[index], index)
+
+
 def _conflict_aware_order(
     grid_map: GridMap,
     scenario: MAPFScenario,
@@ -175,12 +211,10 @@ def _conflict_aware_order(
         scenario=scenario,
         max_timestep=max_timestep,
     )
-    ranked_indices = sorted(
-        range(len(scenario.agents)),
-        key=lambda original_index: sort_key(original_index, inputs),
-    )
-    return MAPFScenario(
-        agents=tuple(scenario.agents[index] for index in ranked_indices)
+    return reorder_scenario_from_conflict_aware_inputs(
+        scenario,
+        inputs,
+        sort_key=sort_key,
     )
 
 
@@ -195,11 +229,7 @@ def conflict_degree_first_high_order(
         grid_map=grid_map,
         scenario=scenario,
         max_timestep=max_timestep,
-        sort_key=lambda index, inputs: (
-            -inputs.degrees[index],
-            inputs.independent_costs[index],
-            index,
-        ),
+        sort_key=cdf_h_sort_key,
     )
 
 
@@ -214,11 +244,7 @@ def conflict_degree_first_low_order(
         grid_map=grid_map,
         scenario=scenario,
         max_timestep=max_timestep,
-        sort_key=lambda index, inputs: (
-            inputs.degrees[index],
-            inputs.independent_costs[index],
-            index,
-        ),
+        sort_key=cdf_l_sort_key,
     )
 
 
@@ -233,11 +259,7 @@ def shortest_path_first_conflict_degree_order(
         grid_map=grid_map,
         scenario=scenario,
         max_timestep=max_timestep,
-        sort_key=lambda index, inputs: (
-            inputs.independent_costs[index],
-            -inputs.degrees[index],
-            index,
-        ),
+        sort_key=spf_cd_sort_key,
     )
 
 
