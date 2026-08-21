@@ -22,28 +22,35 @@
 
 - All 27 catalogue instances succeeded for Fixed Priority, Random K=10, SPF, and LPF in the stored datasets.
 - 7 of 27 instances show observed priority sensitivity (>1 unique successful Random SoC among K=10 orderings).
+- 1 of 27 instances show observed makespan sensitivity under Random K=10.
 - SPF differs from Fixed on 4 instances; LPF differs from Fixed on 5; SPF differs from LPF on 7 instances.
 - 6 priority-sensitive instances change SoC while successful Random makespan remains constant.
 
-### Pairwise SoC summaries (diff = LEFT - RIGHT; positive => RIGHT better)
+### Pairwise SoC summaries (diff = LEFT SoC - RIGHT SoC; diff < 0 => LEFT better; diff > 0 => RIGHT better)
 
-- fixed_vs_spf: common-success=27, mean diff=40.74, median diff=0.00, LEFT better=0, equal=23, RIGHT better=4
-- fixed_vs_lpf: common-success=27, mean diff=-3.41, median diff=0.00, LEFT better=2, equal=22, RIGHT better=3
-- spf_vs_lpf: common-success=27, mean diff=-44.15, median diff=0.00, LEFT better=5, equal=20, RIGHT better=2
+- Fixed vs SPF: common-success=27, mean diff=40.74, median diff=0.00, LEFT better=0, equal=23, RIGHT better=4
+- Fixed vs LPF: common-success=27, mean diff=-3.41, median diff=0.00, LEFT better=2, equal=22, RIGHT better=3
+- SPF vs LPF: common-success=27, mean diff=-44.15, median diff=0.00, LEFT better=5, equal=20, RIGHT better=2
 
 ### Runtime
 
-- Mean SPF total runtime: 59625.44 ms (ordering 29621.78 ms, PP 30003.66 ms).
-- Mean LPF total runtime: 66861.10 ms (ordering 29694.56 ms, PP 37166.54 ms).
+- Mean SPF total runtime: 59.63 s (ordering 29.62 s, 49.7% of total; PP 30.00 s).
+- Mean LPF total runtime: 66.86 s (ordering 29.69 s, 44.4% of total; PP 37.17 s).
+- Median SPF total runtime: 57.40 s; median LPF total runtime: 57.97 s.
 - SPF total faster on 19 instances; LPF total faster on 8 instances.
+- Median SPF/LPF total runtimes are similar; the higher LPF mean is influenced by expensive priority-sensitive cases rather than uniformly slower LPF behaviour.
 
-### CBS quality reference
+### Basic CBS quality reference
 
-- Common-success Basic CBS reference available on 22 instances.
+- Basic CBS common-success reference available on 22 instances.
+- Fixed vs Basic CBS: mean gap=16.50, median gap=0.00, strategy better=0, equal=18, Basic CBS better=4.
+- Random K=10 median vs Basic CBS: mean gap=6.45, median gap=0.00, strategy better=0, equal=19, Basic CBS better=3.
+- SPF vs Basic CBS: mean gap=0.18, median gap=0.00, strategy better=0, equal=20, Basic CBS better=2.
+- LPF vs Basic CBS: mean gap=16.23, median gap=0.00, strategy better=0, equal=20, Basic CBS better=2.
 
 ## Interpretation
 
 - Priority ordering can change PP solution quality on a subset of instances even when makespan remains unchanged, which supports studying adaptive or conflict-aware priority selection rather than assuming a single fixed order.
 - SPF and LPF do not uniformly dominate Fixed Priority or Random K=10; their value depends on instance-level interaction structure.
 - The extra independent-path ordering cost of SPF/LPF is non-trivial and must be accounted for when comparing runtime against Fixed or Random PP.
-- CBS remains useful as a quality reference on solvable instances, but timeout/expansion-limit records are excluded from quality means.
+- Basic CBS remains useful as a quality reference on solvable instances, but timeout/expansion-limit records are excluded from quality means.

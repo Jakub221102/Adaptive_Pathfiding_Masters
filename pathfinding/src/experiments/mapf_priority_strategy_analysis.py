@@ -995,6 +995,178 @@ def _format_float(value: Any, *, digits: int = 2) -> str:
     return str(value)
 
 
+def _format_percent(count: int, total: int, *, digits: int = 1) -> str:
+    if total == 0:
+        return "n/a"
+    return f"{count / total * 100:.{digits}f}%"
+
+
+def _ms_to_seconds(value: Any) -> float:
+    return float(value) / 1000.0
+
+
+PAIRWISE_COMPARISON_LABELS: dict[str, str] = {
+    "fixed_vs_spf": "Fixed vs SPF",
+    "fixed_vs_lpf": "Fixed vs LPF",
+    "spf_vs_lpf": "SPF vs LPF",
+}
+
+
+def format_pairwise_comparison_label(comparison: str) -> str:
+    return PAIRWISE_COMPARISON_LABELS.get(comparison, comparison)
+
+
+def build_success_rate_table_rows(
+    instance_rows: Sequence[dict[str, Any]],
+    *,
+    expected_random_k: int,
+) -> list[dict[str, Any]]:
+    instance_count = len(instance_rows)
+    fixed_success = sum(1 for row in instance_rows if _row_bool(row["fixed_success"]))
+    spf_success = sum(1 for row in instance_rows if _row_bool(row["spf_success"]))
+    lpf_success = sum(1 for row in instance_rows if _row_bool(row["lpf_success"]))
+    random_success_runs = sum(_row_int(row["random_success_count"]) or 0 for row in instance_rows)
+    random_total_runs = sum(_row_int(row["random_ordering_count"]) or 0 for row in instance_rows)
+
+    return [
+        {
+            "strategy": "Fixed Priority",
+            "successful": fixed_success,
+            "total": instance_count,
+            "total_label": f"{fixed_success} / {instance_count}",
+            "success_rate": fixed_success / instance_count if instance_count else 0.0,
+            "note": "one PP execution per MAPF instance",
+        },
+        {
+            "strategy": f"Random K={expected_random_k}",
+            "successful": random_success_runs,
+            "total": random_total_runs,
+            "total_label": f"{random_success_runs} / {random_total_runs} runs",
+            "success_rate": (
+                random_success_runs / random_total_runs if random_total_runs else 0.0
+            ),
+            "note": (
+                f"{expected_random_k} nested ordering runs per instance "
+                f"({instance_count} MAPF instances; not {random_total_runs} independent instances)"
+            ),
+        },
+        {
+            "strategy": "SPF",
+            "successful": spf_success,
+            "total": instance_count,
+            "total_label": f"{spf_success} / {instance_count}",
+            "success_rate": spf_success / instance_count if instance_count else 0.0,
+            "note": "one SPF execution per MAPF instance",
+        },
+        {
+            "strategy": "LPF",
+            "successful": lpf_success,
+            "total": instance_count,
+            "total_label": f"{lpf_success} / {instance_count}",
+            "success_rate": lpf_success / instance_count if instance_count else 0.0,
+            "note": "one LPF execution per MAPF instance",
+        },
+    ]
+
+
+def build_sensitivity_table_metrics(
+    sensitivity_rows: Sequence[dict[str, Any]],
+    *,
+    instance_count: int,
+) -> dict[str, Any]:
+    soc_sensitive = sum(
+        1 for row in sensitivity_rows if _row_bool(row["observed_priority_sensitive"])
+    )
+    makespan_sensitive = sum(
+        1
+        for row in sensitivity_rows
+        if (_row_int(row.get("random_makespan_range")) or 0) > 0
+    )
+    max_soc_range = max(
+        (_row_int(row.get("random_soc_range")) or 0) for row in sensitivity_rows
+    )
+    return {
+        "soc_sensitive_count": soc_sensitive,
+        "soc_not_sensitive_count": instance_count - soc_sensitive,
+        "soc_sensitive_pct": _format_percent(soc_sensitive, instance_count),
+        "soc_not_sensitive_pct": _format_percent(instance_count - soc_sensitive, instance_count),
+        "makespan_sensitive_count": makespan_sensitive,
+        "makespan_not_sensitive_count": instance_count - makespan_sensitive,
+        "makespan_sensitive_pct": _format_percent(makespan_sensitive, instance_count),
+        "makespan_not_sensitive_pct": _format_percent(
+            instance_count - makespan_sensitive,
+            instance_count,
+        ),
+        "max_random_soc_range": max_soc_range,
+    }
+
+
+def compute_runtime_fractions(
+    aggregate: dict[str, Any],
+) -> dict[str, float]:
+    mean_spf_total = float(aggregate["mean_spf_total_time_ms"])
+    mean_lpf_total = float(aggregate["mean_lpf_total_time_ms"])
+    mean_spf_ordering = float(aggregate["mean_spf_ordering_time_ms"])
+    mean_lpf_ordering = float(aggregate["mean_lpf_ordering_time_ms"])
+    return {
+        "spf_ordering_fraction": mean_spf_ordering / mean_spf_total,
+        "lpf_ordering_fraction": mean_lpf_ordering / mean_lpf_total,
+    }
+
+
+def _directional_cbs_gaps(gaps: Sequence[float | int]) -> dict[str, int]:
+    strategy_better = sum(1 for gap in gaps if gap < 0)
+    equal = sum(1 for gap in gaps if gap == 0)
+    cbs_better = sum(1 for gap in gaps if gap > 0)
+    return {
+        "strategy_better_count": strategy_better,
+        "equal_count": equal,
+        "basic_cbs_better_count": cbs_better,
+    }
+
+
+def build_cbs_aggregate_quality_summary(
+    cbs_rows: Sequence[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    common_success_count = len(cbs_rows)
+    summaries: list[dict[str, Any]] = []
+
+    strategy_specs = (
+        ("Fixed", "fixed_minus_cbs_soc", False),
+        ("Random K=10 median", "random_median_minus_cbs_soc", False),
+        ("SPF", "spf_minus_cbs_soc", False),
+        ("LPF", "lpf_minus_cbs_soc", False),
+        (
+            "Random sampled best-of-K (diagnostic)",
+            "random_sampled_best_of_k_minus_cbs_soc",
+            True,
+        ),
+    )
+
+    for strategy_label, gap_key, diagnostic in strategy_specs:
+        gaps = [
+            float(row[gap_key])
+            for row in cbs_rows
+            if row.get(gap_key) not in ("", None)
+        ]
+        directional = _directional_cbs_gaps(gaps)
+        summaries.append(
+            {
+                "strategy": strategy_label,
+                "common_success_count": common_success_count,
+                "mean_soc_gap": statistics.mean(gaps) if gaps else "",
+                "median_soc_gap": statistics.median(gaps) if gaps else "",
+                "strategy_better_count": directional["strategy_better_count"],
+                "equal_count": directional["equal_count"],
+                "basic_cbs_better_count": directional["basic_cbs_better_count"],
+                "gap_definition": "strategy SoC - Basic CBS SoC (negative => strategy better)",
+                "diagnostic_only": diagnostic,
+            }
+        )
+
+    return summaries
+
+
 def build_analysis_summary_md(
     *,
     config: PriorityStrategyAnalysisConfig,
@@ -1028,6 +1200,12 @@ def build_analysis_summary_md(
         (row for row in runtime_rows if row.get("metric_group") == "runtime_aggregate"),
         {},
     )
+    runtime_fractions = compute_runtime_fractions(aggregate) if aggregate else {}
+    sensitivity_metrics = build_sensitivity_table_metrics(
+        sensitivity_rows,
+        instance_count=len(instance_rows),
+    )
+    cbs_aggregate = build_cbs_aggregate_quality_summary(cbs_rows)
 
     lines = [
         "# MAPF-6 Priority Strategy Analysis Summary",
@@ -1055,16 +1233,19 @@ def build_analysis_summary_md(
         f"- All {len(instance_rows)} catalogue instances succeeded for Fixed Priority, Random K={config.expected_random_k}, SPF, and LPF in the stored datasets.",
         f"- {sensitive_count} of {len(instance_rows)} instances show observed priority sensitivity "
         f"(>1 unique successful Random SoC among K={config.expected_random_k} orderings).",
+        f"- {sensitivity_metrics['makespan_sensitive_count']} of {len(instance_rows)} instances show "
+        f"observed makespan sensitivity under Random K={config.expected_random_k}.",
         f"- SPF differs from Fixed on {spf_fixed_diff} instances; LPF differs from Fixed on {lpf_fixed_diff}; SPF differs from LPF on {spf_lpf_diff} instances.",
         f"- {soc_change_makespan_constant} priority-sensitive instances change SoC while successful Random makespan remains constant.",
         "",
-        "### Pairwise SoC summaries (diff = LEFT - RIGHT; positive => RIGHT better)",
+        "### Pairwise SoC summaries (diff = LEFT SoC - RIGHT SoC; diff < 0 => LEFT better; diff > 0 => RIGHT better)",
         "",
     ]
 
     for summary in paired_summary:
+        label = format_pairwise_comparison_label(summary["comparison"])
         lines.append(
-            f"- {summary['comparison']}: common-success={summary['common_success_count']}, "
+            f"- {label}: common-success={summary['common_success_count']}, "
             f"mean diff={_format_float(summary['mean_soc_diff'])}, "
             f"median diff={_format_float(summary['median_soc_diff'])}, "
             f"LEFT better={summary['left_better_count']}, "
@@ -1072,30 +1253,67 @@ def build_analysis_summary_md(
             f"RIGHT better={summary['right_better_count']}"
         )
 
+    if aggregate:
+        spf_ordering_pct = runtime_fractions["spf_ordering_fraction"] * 100
+        lpf_ordering_pct = runtime_fractions["lpf_ordering_fraction"] * 100
+        lines.extend(
+            [
+                "",
+                "### Runtime",
+                "",
+                f"- Mean SPF total runtime: {_format_float(_ms_to_seconds(aggregate.get('mean_spf_total_time_ms')))} s "
+                f"(ordering {_format_float(_ms_to_seconds(aggregate.get('mean_spf_ordering_time_ms')))} s, "
+                f"{_format_float(spf_ordering_pct, digits=1)}% of total; "
+                f"PP {_format_float(_ms_to_seconds(aggregate.get('mean_spf_pp_time_ms')))} s).",
+                f"- Mean LPF total runtime: {_format_float(_ms_to_seconds(aggregate.get('mean_lpf_total_time_ms')))} s "
+                f"(ordering {_format_float(_ms_to_seconds(aggregate.get('mean_lpf_ordering_time_ms')))} s, "
+                f"{_format_float(lpf_ordering_pct, digits=1)}% of total; "
+                f"PP {_format_float(_ms_to_seconds(aggregate.get('mean_lpf_pp_time_ms')))} s).",
+                f"- Median SPF total runtime: {_format_float(_ms_to_seconds(aggregate.get('median_spf_total_time_ms')))} s; "
+                f"median LPF total runtime: {_format_float(_ms_to_seconds(aggregate.get('median_lpf_total_time_ms')))} s.",
+                f"- SPF total faster on {aggregate.get('spf_total_faster_count', 'n/a')} instances; "
+                f"LPF total faster on {aggregate.get('lpf_total_faster_count', 'n/a')} instances.",
+                "- Median SPF/LPF total runtimes are similar; the higher LPF mean is influenced by "
+                "expensive priority-sensitive cases rather than uniformly slower LPF behaviour.",
+                "",
+                "### Basic CBS quality reference",
+                "",
+                f"- Basic CBS common-success reference available on {len(cbs_rows)} instances.",
+            ]
+        )
+        for row in cbs_aggregate:
+            if row["diagnostic_only"]:
+                continue
+            lines.append(
+                f"- {row['strategy']} vs Basic CBS: mean gap={_format_float(row['mean_soc_gap'])}, "
+                f"median gap={_format_float(row['median_soc_gap'])}, "
+                f"strategy better={row['strategy_better_count']}, "
+                f"equal={row['equal_count']}, "
+                f"Basic CBS better={row['basic_cbs_better_count']}."
+            )
+    else:
+        lines.extend(
+            [
+                "",
+                "### Runtime",
+                "",
+                "- Runtime aggregate unavailable.",
+                "",
+                "### Basic CBS quality reference",
+                "",
+                f"- Basic CBS common-success reference available on {len(cbs_rows)} instances.",
+            ]
+        )
+
     lines.extend(
         [
-            "",
-            "### Runtime",
-            "",
-            f"- Mean SPF total runtime: {_format_float(aggregate.get('mean_spf_total_time_ms'))} ms "
-            f"(ordering {_format_float(aggregate.get('mean_spf_ordering_time_ms'))} ms, "
-            f"PP {_format_float(aggregate.get('mean_spf_pp_time_ms'))} ms).",
-            f"- Mean LPF total runtime: {_format_float(aggregate.get('mean_lpf_total_time_ms'))} ms "
-            f"(ordering {_format_float(aggregate.get('mean_lpf_ordering_time_ms'))} ms, "
-            f"PP {_format_float(aggregate.get('mean_lpf_pp_time_ms'))} ms).",
-            f"- SPF total faster on {aggregate.get('spf_total_faster_count', 'n/a')} instances; "
-            f"LPF total faster on {aggregate.get('lpf_total_faster_count', 'n/a')} instances.",
-            "",
-            "### CBS quality reference",
-            "",
-            f"- Common-success Basic CBS reference available on {len(cbs_rows)} instances.",
             "",
             "## Interpretation",
             "",
             "- Priority ordering can change PP solution quality on a subset of instances even when makespan remains unchanged, which supports studying adaptive or conflict-aware priority selection rather than assuming a single fixed order.",
             "- SPF and LPF do not uniformly dominate Fixed Priority or Random K=10; their value depends on instance-level interaction structure.",
             "- The extra independent-path ordering cost of SPF/LPF is non-trivial and must be accounted for when comparing runtime against Fixed or Random PP.",
-            "- CBS remains useful as a quality reference on solvable instances, but timeout/expansion-limit records are excluded from quality means.",
+            "- Basic CBS remains useful as a quality reference on solvable instances, but timeout/expansion-limit records are excluded from quality means.",
             "",
         ]
     )
@@ -1111,43 +1329,62 @@ def build_thesis_tables_md(
     cbs_rows: Sequence[dict[str, Any]],
     expected_random_k: int,
 ) -> str:
-    success_rates = {
-        "fixed": sum(1 for row in instance_rows if row["fixed_success"]) / len(instance_rows),
-        "spf": sum(1 for row in instance_rows if row["spf_success"]) / len(instance_rows),
-        "lpf": sum(1 for row in instance_rows if row["lpf_success"]) / len(instance_rows),
-        "random_mean": statistics.mean(row["random_success_rate"] for row in instance_rows),
-    }
+    instance_count = len(instance_rows)
+    success_rows = build_success_rate_table_rows(
+        instance_rows,
+        expected_random_k=expected_random_k,
+    )
+    sensitivity_metrics = build_sensitivity_table_metrics(
+        sensitivity_rows,
+        instance_count=instance_count,
+    )
 
     sensitive_rows = [
-        row for row in sensitivity_rows if row["observed_priority_sensitive"]
+        row for row in sensitivity_rows if _row_bool(row["observed_priority_sensitive"])
     ]
-    sensitive_rows.sort(key=lambda row: row["random_soc_range"], reverse=True)
+    sensitive_rows.sort(
+        key=lambda row: (_row_int(row.get("random_soc_range")) or 0, str(row["instance_id"])),
+        reverse=True,
+    )
 
     aggregate = next(
         row for row in runtime_rows if row.get("metric_group") == "runtime_aggregate"
     )
+    runtime_fractions = compute_runtime_fractions(aggregate)
+    cbs_aggregate = build_cbs_aggregate_quality_summary(cbs_rows)
 
     lines = [
         "# MAPF-6 Thesis Tables",
         "",
         "## Table A — Success rates",
         "",
-        "| Strategy | Success rate |",
-        "|---|---:|",
-        f"| Fixed Priority | {success_rates['fixed']:.3f} |",
-        f"| Random K={expected_random_k} (instance mean) | {success_rates['random_mean']:.3f} |",
-        f"| SPF | {success_rates['spf']:.3f} |",
-        f"| LPF | {success_rates['lpf']:.3f} |",
-        "",
-        "## Table B — Pairwise SoC comparisons",
-        "",
-        "| Comparison | Common success | Mean diff | Median diff | LEFT better | Equal | RIGHT better |",
-        "|---|---:|---:|---:|---:|---:|---:|",
+        "| Strategy | Successful / total | Success rate |",
+        "|---|---:|---:|",
     ]
 
-    for summary in paired_summary:
+    for row in success_rows:
         lines.append(
-            f"| {summary['comparison']} | {summary['common_success_count']} | "
+            f"| {row['strategy']} | {row['total_label']} | "
+            f"{row['success_rate'] * 100:.1f}% |"
+        )
+
+    random_note = next(row["note"] for row in success_rows if "Random K=" in row["strategy"])
+    lines.extend(
+        [
+            "",
+            f"*Note: {random_note}.*",
+            "",
+            "## Table B — Pairwise SoC comparisons",
+            "",
+            "| Comparison | Common success | Mean diff | Median diff | LEFT better | Equal | RIGHT better |",
+            "|---|---:|---:|---:|---:|---:|---:|",
+        ]
+    )
+
+    for summary in paired_summary:
+        label = format_pairwise_comparison_label(summary["comparison"])
+        lines.append(
+            f"| {label} | {summary['common_success_count']} | "
             f"{_format_float(summary['mean_soc_diff'])} | "
             f"{_format_float(summary['median_soc_diff'])} | "
             f"{summary['left_better_count']} | {summary['equal_count']} | "
@@ -1157,24 +1394,54 @@ def build_thesis_tables_md(
     lines.extend(
         [
             "",
-            "## Table C — Random sensitivity summary",
+            "*Sign convention: diff = LEFT SoC - RIGHT SoC. "
+            "Therefore diff < 0 → LEFT better; diff > 0 → RIGHT better; diff = 0 → equal.*",
             "",
-            f"| Metric | Value |",
-            f"|---|---:|",
-            f"| Priority-sensitive instances | {len(sensitive_rows)} / {len(instance_rows)} |",
-            f"| Max Random SoC range | {max((row['random_soc_range'] or 0) for row in sensitivity_rows)} |",
+            "## Table C — Random priority sensitivity under Random K=10",
+            "",
+            "| Metric | Count / total | Percentage |",
+            "|---|---:|---:|",
+            f"| Observed SoC-sensitive instances | "
+            f"{sensitivity_metrics['soc_sensitive_count']} / {instance_count} | "
+            f"{sensitivity_metrics['soc_sensitive_pct']} |",
+            f"| No observed SoC sensitivity in K={expected_random_k} | "
+            f"{sensitivity_metrics['soc_not_sensitive_count']} / {instance_count} | "
+            f"{sensitivity_metrics['soc_not_sensitive_pct']} |",
+            f"| Observed makespan-sensitive instances | "
+            f"{sensitivity_metrics['makespan_sensitive_count']} / {instance_count} | "
+            f"{sensitivity_metrics['makespan_sensitive_pct']} |",
+            f"| Maximum sampled Random SoC range | "
+            f"{sensitivity_metrics['max_random_soc_range']} | — |",
+            "",
+            f"*Note: K={expected_random_k} is a sampled subset of possible priority permutations; "
+            "these counts describe observed sensitivity under that sample, not the full permutation space.*",
             "",
             "## Table D — SPF vs LPF runtime cost",
             "",
             "| Metric | SPF | LPF |",
             "|---|---:|---:|",
-            f"| Mean total runtime (ms) | {_format_float(aggregate['mean_spf_total_time_ms'])} | {_format_float(aggregate['mean_lpf_total_time_ms'])} |",
-            f"| Mean ordering runtime (ms) | {_format_float(aggregate['mean_spf_ordering_time_ms'])} | {_format_float(aggregate['mean_lpf_ordering_time_ms'])} |",
-            f"| Mean PP runtime (ms) | {_format_float(aggregate['mean_spf_pp_time_ms'])} | {_format_float(aggregate['mean_lpf_pp_time_ms'])} |",
-            f"| Median total runtime (ms) | {_format_float(aggregate['median_spf_total_time_ms'])} | {_format_float(aggregate['median_lpf_total_time_ms'])} |",
-            f"| Instances where strategy is faster (total) | {aggregate['spf_total_faster_count']} (SPF) | {aggregate['lpf_total_faster_count']} (LPF) |",
+            f"| Mean total runtime (s) | "
+            f"{_format_float(_ms_to_seconds(aggregate['mean_spf_total_time_ms']))} | "
+            f"{_format_float(_ms_to_seconds(aggregate['mean_lpf_total_time_ms']))} |",
+            f"| Median total runtime (s) | "
+            f"{_format_float(_ms_to_seconds(aggregate['median_spf_total_time_ms']))} | "
+            f"{_format_float(_ms_to_seconds(aggregate['median_lpf_total_time_ms']))} |",
+            f"| Mean ordering runtime (s) | "
+            f"{_format_float(_ms_to_seconds(aggregate['mean_spf_ordering_time_ms']))} | "
+            f"{_format_float(_ms_to_seconds(aggregate['mean_lpf_ordering_time_ms']))} |",
+            f"| Mean PP runtime (s) | "
+            f"{_format_float(_ms_to_seconds(aggregate['mean_spf_pp_time_ms']))} | "
+            f"{_format_float(_ms_to_seconds(aggregate['mean_lpf_pp_time_ms']))} |",
+            f"| Ordering fraction of mean total runtime | "
+            f"{_format_float(runtime_fractions['spf_ordering_fraction'] * 100, digits=1)}% | "
+            f"{_format_float(runtime_fractions['lpf_ordering_fraction'] * 100, digits=1)}% |",
+            f"| Instances where strategy is faster (total) | "
+            f"{aggregate['spf_total_faster_count']} (SPF) | "
+            f"{aggregate['lpf_total_faster_count']} (LPF) |",
             "",
-            "## Table E — Selected priority-sensitive cases",
+            "*Note: total runtime = ordering time + PP time; ordering includes independent Space-Time A* searches.*",
+            "",
+            "## Table E — Observed priority-sensitive instances under Random K=10",
             "",
             "| Instance | Agents | Interaction | Random SoC range | Fixed | SPF | LPF | Random median |",
             "|---|---:|---|---:|---:|---:|---:|---:|",
@@ -1182,7 +1449,7 @@ def build_thesis_tables_md(
     )
 
     lookup = {row["instance_id"]: row for row in instance_rows}
-    for row in sensitive_rows[:10]:
+    for row in sensitive_rows:
         instance = lookup[row["instance_id"]]
         lines.append(
             f"| {row['instance_id']} | {row['agent_count']} | {row['interaction_level']} | "
@@ -1193,21 +1460,36 @@ def build_thesis_tables_md(
     lines.extend(
         [
             "",
-            "## Table F — CBS quality reference (common success only)",
+            f"*Note: interaction levels LOW/MEDIUM/HIGH are interaction strata, not difficulty labels. "
+            f"All {len(sensitive_rows)} observed SoC-sensitive instances are listed, sorted by Random SoC range descending.*",
             "",
-            "| Instance | CBS SoC | Fixed | SPF | LPF | Random median | Sampled best-of-K |",
+            "## Table F — Basic CBS quality reference (aggregate over common-success instances)",
+            "",
+            f"*Basic CBS common-success instances: {len(cbs_rows)}. "
+            "Timeout/expansion-limit cases are excluded from quality averages.*",
+            "",
+            "| Strategy | Common success | Mean SoC gap | Median SoC gap | Strategy better | Equal | Basic CBS better |",
             "|---|---:|---:|---:|---:|---:|---:|",
         ]
     )
 
-    for row in cbs_rows[:10]:
+    for row in cbs_aggregate:
+        diagnostic_suffix = " *(diagnostic only)*" if row["diagnostic_only"] else ""
         lines.append(
-            f"| {row['instance_id']} | {row['cbs_soc']} | {row['fixed_soc']} | "
-            f"{row['spf_soc']} | {row['lpf_soc']} | {row['random_soc_median']} | "
-            f"{row['random_sampled_best_of_k_soc']} |"
+            f"| {row['strategy']}{diagnostic_suffix} | {row['common_success_count']} | "
+            f"{_format_float(row['mean_soc_gap'])} | {_format_float(row['median_soc_gap'])} | "
+            f"{row['strategy_better_count']} | {row['equal_count']} | "
+            f"{row['basic_cbs_better_count']} |"
         )
 
-    lines.append("")
+    lines.extend(
+        [
+            "",
+            "*Gap definition: strategy SoC - Basic CBS SoC. "
+            "Negative gap → strategy better; positive gap → Basic CBS better; zero → equal.*",
+            "",
+        ]
+    )
     return "\n".join(lines)
 
 
