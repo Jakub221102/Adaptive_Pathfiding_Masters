@@ -52,6 +52,14 @@ MAIN_PRIORITY_STRATEGY_JSONL = (
     MAIN_PRIORITY_STRATEGY_RESULTS_DIR / "results_details.jsonl"
 )
 
+HELD_OUT_SPF_RESULTS_DIR = Path("pathfinding/results/mapf_spf_heldout_execution")
+HELD_OUT_SPF_CSV = HELD_OUT_SPF_RESULTS_DIR / "results.csv"
+HELD_OUT_SPF_JSONL = HELD_OUT_SPF_RESULTS_DIR / "results_details.jsonl"
+HELD_OUT_SPF_LOG = HELD_OUT_SPF_RESULTS_DIR / "run.log"
+HELD_OUT_MANIFEST_PATH = Path(
+    "pathfinding/results/mapf_benchmarks/AR0204SR_heldout_manifest.json"
+)
+
 
 @dataclass(frozen=True, slots=True)
 class PriorityStrategyRunKey:
@@ -86,6 +94,8 @@ class PriorityStrategyRunRecord:
 
     pp_search_metrics: MAPFPPSearchMetrics | None = None
     error_message: str | None = None
+    catalogue_role: str | None = None
+    catalogue_seed: int | None = None
 
 
 def run_key(record: PriorityStrategyRunRecord) -> PriorityStrategyRunKey:
@@ -159,6 +169,8 @@ def execute_priority_strategy_run(
     instance: MAPFBenchmarkInstance,
     strategy: PriorityStrategy,
     max_timestep: int,
+    catalogue_role: str | None = None,
+    catalogue_seed: int | None = None,
 ) -> PriorityStrategyRunRecord:
     if max_timestep < 0:
         raise ValueError("max_timestep must be non-negative")
@@ -190,6 +202,8 @@ def execute_priority_strategy_run(
             conflict_count=None,
             pp_search_metrics=None,
             error_message=str(error),
+            catalogue_role=catalogue_role,
+            catalogue_seed=catalogue_seed,
         )
     ordering_time_ms = (time.perf_counter() - ordering_start) * 1000.0
     agent_order = tuple(agent.agent_id for agent in reordered_scenario.agents)
@@ -220,6 +234,8 @@ def execute_priority_strategy_run(
             makespan=None,
             conflict_count=None,
             pp_search_metrics=pp_metrics,
+            catalogue_role=catalogue_role,
+            catalogue_seed=catalogue_seed,
         )
 
     _validate_successful_solution(run.result)
@@ -241,6 +257,8 @@ def execute_priority_strategy_run(
         makespan=solution_makespan,
         conflict_count=0,
         pp_search_metrics=pp_metrics,
+        catalogue_role=catalogue_role,
+        catalogue_seed=catalogue_seed,
     )
 
 
@@ -250,6 +268,8 @@ def execute_priority_strategy_plan_entry(
     scenarios: Sequence[Scenario],
     entry: PriorityStrategyRunPlanEntry,
     max_timestep: int,
+    catalogue_role: str | None = None,
+    catalogue_seed: int | None = None,
 ) -> PriorityStrategyRunRecord:
     scenario = reconstruct_mapf_scenario_from_instance(
         scenarios=scenarios,
@@ -262,6 +282,8 @@ def execute_priority_strategy_plan_entry(
         instance=entry.instance,
         strategy=entry.strategy,
         max_timestep=max_timestep,
+        catalogue_role=catalogue_role,
+        catalogue_seed=catalogue_seed,
     )
 
 
@@ -293,6 +315,10 @@ def _run_record_to_json(record: PriorityStrategyRunRecord) -> dict[str, object]:
     }
     if record.error_message is not None:
         payload["error_message"] = record.error_message
+    if record.catalogue_role is not None:
+        payload["catalogue_role"] = record.catalogue_role
+    if record.catalogue_seed is not None:
+        payload["catalogue_seed"] = record.catalogue_seed
     return payload
 
 
@@ -315,6 +341,8 @@ def _run_record_from_json(data: dict[str, object]) -> PriorityStrategyRunRecord:
     conflict_count_value = data.get("conflict_count")
     pp_time_value = data.get("pp_time_ms")
     error_message = data.get("error_message")
+    catalogue_role = data.get("catalogue_role")
+    catalogue_seed = data.get("catalogue_seed")
 
     return PriorityStrategyRunRecord(
         instance_id=str(data["instance_id"]),
@@ -334,6 +362,8 @@ def _run_record_from_json(data: dict[str, object]) -> PriorityStrategyRunRecord:
         ),
         pp_search_metrics=pp_metrics,
         error_message=None if error_message is None else str(error_message),
+        catalogue_role=None if catalogue_role is None else str(catalogue_role),
+        catalogue_seed=None if catalogue_seed is None else int(catalogue_seed),
     )
 
 
@@ -394,6 +424,8 @@ def _flatten_run_record(record: PriorityStrategyRunRecord) -> dict[str, object]:
         "makespan": record.makespan,
         "conflict_count": record.conflict_count,
         "error_message": record.error_message,
+        "catalogue_role": record.catalogue_role,
+        "catalogue_seed": record.catalogue_seed,
     }
 
     if record.pp_search_metrics is not None:
