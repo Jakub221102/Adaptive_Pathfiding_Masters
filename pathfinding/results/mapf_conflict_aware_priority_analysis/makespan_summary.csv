@@ -1,0 +1,5 @@
+comparison,common_count,mean_makespan_diff,median_makespan_diff,left_better_count,equal_count,right_better_count,differing_instance_count
+cdf_h_vs_spf,27,0,0,0,27,0,0
+cdf_l_vs_spf,27,-0.07407407407407407,0,1,26,0,1
+spf_cd_vs_spf,27,0,0,0,27,0,0
+cdf_h_vs_cdf_l,27,0.07407407407407407,0,0,26,1,1

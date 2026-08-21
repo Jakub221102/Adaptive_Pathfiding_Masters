@@ -1,0 +1,9 @@
+comparison,left_strategy,right_strategy,common_success_count,mean_soc_diff,median_soc_diff,min_soc_diff,max_soc_diff,left_better_count,equal_count,right_better_count,soc_diff_definition
+cdf_h_vs_fixed,CDF-H,Fixed,27,-13.333333333333334,0,-304,43,3,22,2,left_soc - right_soc (negative => left better)
+cdf_h_vs_spf,CDF-H,SPF,27,27.40740740740741,0,0,415,0,23,4,left_soc - right_soc (negative => left better)
+cdf_h_vs_lpf,CDF-H,LPF,27,-16.74074074074074,0,-304,2,3,22,2,left_soc - right_soc (negative => left better)
+cdf_h_vs_cdf_l,CDF-H,CDF-L,27,16.296296296296298,0,0,219,0,22,5,left_soc - right_soc (negative => left better)
+cdf_h_vs_spf_cd,CDF-H,SPF+CD,27,27.40740740740741,0,0,415,0,23,4,left_soc - right_soc (negative => left better)
+cdf_l_vs_spf,CDF-L,SPF,27,11.11111111111111,0,-2,304,2,24,1,left_soc - right_soc (negative => left better)
+spf_cd_vs_spf,SPF+CD,SPF,27,0,0,0,0,0,27,0,left_soc - right_soc (negative => left better)
+cdf_l_vs_spf_cd,CDF-L,SPF+CD,27,11.11111111111111,0,-2,304,2,24,1,left_soc - right_soc (negative => left better)

@@ -1,0 +1,16 @@
+interaction_level,strategy,instance_count,mean_soc,median_soc,mean_soc_diff_vs_spf,median_soc_diff_vs_spf,better_vs_spf,equal_vs_spf,worse_vs_spf,cdf_h_vs_cdf_l_differing_instances,mapf7_any_strategy_differing_instances
+low,CDF-H,9,2920.222222222222,2400,0,0,0,9,0,,
+low,CDF-L,9,2920.222222222222,2400,0,0,0,9,0,,
+low,SPF+CD,9,2920.222222222222,2400,0,0,0,9,0,,
+low,SPF,9,2920.222222222222,2400,0,0,0,9,0,,
+low,_stratum_meta,9,,,,,,,,0,0
+medium,CDF-H,9,3055,2567,0,0,0,9,0,,
+medium,CDF-L,9,3055,2567,0,0,0,9,0,,
+medium,SPF+CD,9,3055,2567,0,0,0,9,0,,
+medium,SPF,9,3055,2567,0,0,0,9,0,,
+medium,_stratum_meta,9,,,,,,,,0,0
+high,CDF-H,9,3187.777777777778,3181,82.22222222222223,0,0,5,4,,
+high,CDF-L,9,3138.8888888888887,2962,33.333333333333336,0,2,6,1,,
+high,SPF+CD,9,3105.5555555555557,2962,0,0,0,9,0,,
+high,SPF,9,3105.5555555555557,2962,0,0,0,9,0,,
+high,_stratum_meta,9,,,,,,,,5,5

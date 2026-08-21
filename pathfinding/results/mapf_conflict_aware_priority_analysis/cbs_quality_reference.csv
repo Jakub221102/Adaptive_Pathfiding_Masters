@@ -1,0 +1,23 @@
+instance_id,agent_count,interaction_level,cbs_soc,fixed_minus_cbs,spf_minus_cbs,cdf_h_minus_cbs,cdf_l_minus_cbs,spf_cd_minus_cbs,random_median_minus_cbs,random_sampled_best_of_k_minus_cbs,random_sampled_best_of_k_note,reference_note
+AR0204SR_n05_low_000,5,low,1378,0,0,0,0,0,0,0,diagnostic only,Basic CBS quality reference; common-success only
+AR0204SR_n05_low_001,5,low,868,0,0,0,0,0,0,0,diagnostic only,Basic CBS quality reference; common-success only
+AR0204SR_n05_low_002,5,low,878,0,0,0,0,0,0,0,diagnostic only,Basic CBS quality reference; common-success only
+AR0204SR_n05_medium_000,5,medium,1299,0,0,0,0,0,0,0,diagnostic only,Basic CBS quality reference; common-success only
+AR0204SR_n05_medium_001,5,medium,1291,0,0,0,0,0,0,0,diagnostic only,Basic CBS quality reference; common-success only
+AR0204SR_n05_medium_002,5,medium,1396,0,0,0,0,0,0,0,diagnostic only,Basic CBS quality reference; common-success only
+AR0204SR_n05_high_000,5,high,1263,0,0,0,0,0,0,0,diagnostic only,Basic CBS quality reference; common-success only
+AR0204SR_n05_high_001,5,high,1664,0,0,0,0,0,0,0,diagnostic only,Basic CBS quality reference; common-success only
+AR0204SR_n05_high_002,5,high,1668,2,2,2,0,2,2,0,diagnostic only,Basic CBS quality reference; common-success only
+AR0204SR_n10_low_000,10,low,2594,0,0,0,0,0,0,0,diagnostic only,Basic CBS quality reference; common-success only
+AR0204SR_n10_low_001,10,low,2400,0,0,0,0,0,0,0,diagnostic only,Basic CBS quality reference; common-success only
+AR0204SR_n10_low_002,10,low,1862,0,0,0,0,0,0,0,diagnostic only,Basic CBS quality reference; common-success only
+AR0204SR_n10_medium_000,10,medium,2797,138,0,0,0,0,138,0,diagnostic only,Basic CBS quality reference; common-success only
+AR0204SR_n10_medium_001,10,medium,2567,0,0,0,0,0,0,0,diagnostic only,Basic CBS quality reference; common-success only
+AR0204SR_n10_medium_002,10,medium,1960,0,0,0,0,0,0,0,diagnostic only,Basic CBS quality reference; common-success only
+AR0204SR_n10_high_001,10,high,2962,221,0,219,0,0,0,0,diagnostic only,Basic CBS quality reference; common-success only
+AR0204SR_n20_low_000,20,low,5607,0,0,0,0,0,0,0,diagnostic only,Basic CBS quality reference; common-success only
+AR0204SR_n20_low_001,20,low,5969,0,0,0,0,0,0,0,diagnostic only,Basic CBS quality reference; common-success only
+AR0204SR_n20_low_002,20,low,4726,0,0,0,0,0,0,0,diagnostic only,Basic CBS quality reference; common-success only
+AR0204SR_n20_medium_000,20,medium,5190,2,2,2,2,2,2,0,diagnostic only,Basic CBS quality reference; common-success only
+AR0204SR_n20_medium_001,20,medium,5428,0,0,0,0,0,0,0,diagnostic only,Basic CBS quality reference; common-success only
+AR0204SR_n20_medium_002,20,medium,5565,0,0,0,0,0,0,0,diagnostic only,Basic CBS quality reference; common-success only

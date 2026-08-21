@@ -1,0 +1,8 @@
+instance_id,agent_count,interaction_level,fixed_soc,random_soc_median,random_sampled_best_of_k_soc,spf_soc,lpf_soc,cdf_h_soc,cdf_l_soc,spf_cd_soc,cbs_soc,cdf_h_minus_spf,cdf_l_minus_spf,spf_cd_minus_spf,mapf7_strategies_differ_in_soc,subset_source,cdf_l_vs_spf_interpretation
+AR0204SR_n05_high_002,5,high,1670,1670.0,1668,1670,1668,1670,1668,1670,1668,0,-2,0,True,MAPF-6 Random K=10 observed SoC sensitivity (frozen),CDF-L better (lower SoC than SPF)
+AR0204SR_n10_high_000,10,high,2509,2493.0,2485,2487,2564,2550,2485,2487,,63,-2,0,True,MAPF-6 Random K=10 observed SoC sensitivity (frozen),CDF-L better (lower SoC than SPF)
+AR0204SR_n10_medium_000,10,medium,2935,2935.0,2797,2797,2935,2797,2797,2797,2797,0,0,0,False,MAPF-6 Random K=10 observed SoC sensitivity (frozen),equal to SPF
+AR0204SR_n10_high_001,10,high,3183,2962.0,2962,2962,3181,3181,2962,2962,2962,219,0,0,True,MAPF-6 Random K=10 observed SoC sensitivity (frozen),equal to SPF
+AR0204SR_n10_high_002,10,high,3415,3415.0,3415,3415,3458,3458,3415,3415,,43,0,0,True,MAPF-6 Random K=10 observed SoC sensitivity (frozen),equal to SPF
+AR0204SR_n20_medium_000,20,medium,5192,5192.0,5190,5192,5190,5192,5192,5192,5190,0,0,0,False,MAPF-6 Random K=10 observed SoC sensitivity (frozen),equal to SPF
+AR0204SR_n20_high_001,20,high,5461,5461.0,4742,4742,5461,5157,5046,4742,,415,304,0,True,MAPF-6 Random K=10 observed SoC sensitivity (frozen),CDF-L worse (higher SoC than SPF)

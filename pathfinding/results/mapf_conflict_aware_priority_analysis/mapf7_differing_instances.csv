@@ -1,0 +1,6 @@
+instance_id,agent_count,interaction_level,cdf_h_soc,cdf_l_soc,spf_cd_soc,spf_soc,mapf7_soc_range,max_degree,independent_conflict_pair_count
+AR0204SR_n05_high_002,5,high,1670,1668,1670,1670,2,3,3
+AR0204SR_n10_high_000,10,high,2550,2485,2487,2487,65,4,10
+AR0204SR_n10_high_001,10,high,3181,2962,2962,2962,219,3,3
+AR0204SR_n10_high_002,10,high,3458,3415,3415,3415,43,3,4
+AR0204SR_n20_high_001,20,high,5157,5046,4742,4742,415,4,10
