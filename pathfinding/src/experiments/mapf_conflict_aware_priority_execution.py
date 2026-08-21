@@ -30,9 +30,13 @@ from pathfinding.src.experiments.mapf_benchmark_execution import (
     filter_benchmark_instances,
 )
 from pathfinding.src.experiments.mapf_benchmark_instances import (
+    CATALOGUE_ROLE_HELD_OUT,
+    DEFAULT_HELD_OUT_SEED,
     MAPFBenchmarkInstance,
     MAPFBenchmarkManifest,
+    MAPFInteractionLevel,
     reconstruct_mapf_scenario_from_instance,
+    validate_held_out_catalogue,
 )
 
 TERMINATION_ORDERING_FAILURE = "ordering_failure"
@@ -56,6 +60,21 @@ MAIN_CONFLICT_AWARE_RESULTS_DIR = Path(
 MAIN_CONFLICT_AWARE_CSV = MAIN_CONFLICT_AWARE_RESULTS_DIR / "results.csv"
 MAIN_CONFLICT_AWARE_JSONL = MAIN_CONFLICT_AWARE_RESULTS_DIR / "results_details.jsonl"
 MAIN_CONFLICT_AWARE_LOG = MAIN_CONFLICT_AWARE_RESULTS_DIR / "run.log"
+
+HELD_OUT_CONFLICT_AWARE_RESULTS_DIR = Path(
+    "pathfinding/results/mapf_conflict_aware_priority_heldout_execution"
+)
+HELD_OUT_CONFLICT_AWARE_CSV = HELD_OUT_CONFLICT_AWARE_RESULTS_DIR / "results.csv"
+HELD_OUT_CONFLICT_AWARE_JSONL = (
+    HELD_OUT_CONFLICT_AWARE_RESULTS_DIR / "results_details.jsonl"
+)
+HELD_OUT_CONFLICT_AWARE_LOG = HELD_OUT_CONFLICT_AWARE_RESULTS_DIR / "run.log"
+HELD_OUT_MANIFEST_PATH = Path(
+    "pathfinding/results/mapf_benchmarks/AR0204SR_heldout_manifest.json"
+)
+PRIMARY_MANIFEST_PATH = Path(
+    "pathfinding/results/mapf_benchmarks/AR0204SR_manifest.json"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,6 +117,8 @@ class ConflictAwarePriorityRunRecord:
 
     pp_search_metrics: MAPFPPSearchMetrics | None = None
     error_message: str | None = None
+    catalogue_role: str | None = None
+    catalogue_seed: int | None = None
 
 
 def run_key(record: ConflictAwarePriorityRunRecord) -> ConflictAwarePriorityRunKey:
@@ -114,6 +135,61 @@ def original_index_order(
     return tuple(
         original_scenario.agents.index(agent) for agent in reordered_scenario.agents
     )
+
+
+def validate_held_out_execution_manifest(
+    manifest: MAPFBenchmarkManifest,
+    *,
+    primary_manifest: MAPFBenchmarkManifest | None = None,
+    expected_seed: int = DEFAULT_HELD_OUT_SEED,
+    agent_counts: Sequence[int] = (5, 10, 20),
+    instances_per_level: int = 3,
+) -> None:
+    """Validate frozen held-out manifest before MAPF-7 execution."""
+    if manifest.catalogue_role != CATALOGUE_ROLE_HELD_OUT:
+        raise ValueError(
+            f"Expected catalogue_role={CATALOGUE_ROLE_HELD_OUT!r}, "
+            f"found {manifest.catalogue_role!r}"
+        )
+    if manifest.seed != expected_seed:
+        raise ValueError(
+            f"Expected held-out seed {expected_seed}, found {manifest.seed}"
+        )
+
+    expected_total = len(agent_counts) * len(MAPFInteractionLevel) * instances_per_level
+    if len(manifest.instances) != expected_total:
+        raise ValueError(
+            f"Expected {expected_total} held-out instances, found {len(manifest.instances)}"
+        )
+
+    for instance in manifest.instances:
+        if "_HO_" not in instance.instance_id:
+            raise ValueError(
+                f"Held-out instance ID missing _HO_ marker: {instance.instance_id}"
+            )
+
+    counts_by_cell: dict[tuple[int, MAPFInteractionLevel], int] = {}
+    for instance in manifest.instances:
+        key = (instance.agent_count, instance.interaction_level)
+        counts_by_cell[key] = counts_by_cell.get(key, 0) + 1
+
+    for agent_count in agent_counts:
+        for level in MAPFInteractionLevel:
+            count = counts_by_cell.get((agent_count, level), 0)
+            if count != instances_per_level:
+                raise ValueError(
+                    f"Expected {instances_per_level} instances for "
+                    f"agent_count={agent_count}, interaction={level.value}; "
+                    f"found {count}"
+                )
+
+    if primary_manifest is not None:
+        validate_held_out_catalogue(
+            manifest,
+            primary_manifest,
+            agent_counts=agent_counts,
+            instances_per_level=instances_per_level,
+        )
 
 
 def build_conflict_aware_priority_run_plan(
@@ -194,6 +270,8 @@ def execute_conflict_aware_priority_run(
     instance: MAPFBenchmarkInstance,
     strategy: ConflictAwareStrategy,
     max_timestep: int,
+    catalogue_role: str | None = None,
+    catalogue_seed: int | None = None,
 ) -> ConflictAwarePriorityRunRecord:
     if max_timestep < 0:
         raise ValueError("max_timestep must be non-negative")
@@ -236,6 +314,8 @@ def execute_conflict_aware_priority_run(
             conflict_count=None,
             pp_search_metrics=None,
             error_message=str(error),
+            catalogue_role=catalogue_role,
+            catalogue_seed=catalogue_seed,
         )
 
     ordering_time_ms = (time.perf_counter() - ordering_start) * 1000.0
@@ -269,6 +349,8 @@ def execute_conflict_aware_priority_run(
         "pp_time_ms": pp_time_ms,
         "total_time_ms": total_time_ms,
         "pp_search_metrics": pp_metrics,
+        "catalogue_role": catalogue_role,
+        "catalogue_seed": catalogue_seed,
     }
 
     if not run.result.success:
@@ -301,6 +383,8 @@ def execute_conflict_aware_priority_plan_entry(
     scenarios: Sequence[Scenario],
     entry: ConflictAwarePriorityRunPlanEntry,
     max_timestep: int,
+    catalogue_role: str | None = None,
+    catalogue_seed: int | None = None,
 ) -> ConflictAwarePriorityRunRecord:
     scenario = reconstruct_mapf_scenario_from_instance(
         scenarios=scenarios,
@@ -313,6 +397,8 @@ def execute_conflict_aware_priority_plan_entry(
         instance=entry.instance,
         strategy=entry.strategy,
         max_timestep=max_timestep,
+        catalogue_role=catalogue_role,
+        catalogue_seed=catalogue_seed,
     )
 
 
@@ -356,6 +442,10 @@ def _run_record_to_json(record: ConflictAwarePriorityRunRecord) -> dict[str, obj
     }
     if record.error_message is not None:
         payload["error_message"] = record.error_message
+    if record.catalogue_role is not None:
+        payload["catalogue_role"] = record.catalogue_role
+    if record.catalogue_seed is not None:
+        payload["catalogue_seed"] = record.catalogue_seed
     return payload
 
 
@@ -384,6 +474,8 @@ def _run_record_from_json(data: dict[str, object]) -> ConflictAwarePriorityRunRe
     independent_conflict_count = data.get("independent_conflict_count")
     independent_conflict_pair_count = data.get("independent_conflict_pair_count")
     ordering_low_level_searches = data.get("ordering_low_level_searches")
+    catalogue_role = data.get("catalogue_role")
+    catalogue_seed = data.get("catalogue_seed")
 
     return ConflictAwarePriorityRunRecord(
         instance_id=str(data["instance_id"]),
@@ -421,6 +513,8 @@ def _run_record_from_json(data: dict[str, object]) -> ConflictAwarePriorityRunRe
         ),
         pp_search_metrics=pp_metrics,
         error_message=None if error_message is None else str(error_message),
+        catalogue_role=None if catalogue_role is None else str(catalogue_role),
+        catalogue_seed=None if catalogue_seed is None else int(catalogue_seed),
     )
 
 
@@ -497,6 +591,8 @@ def _flatten_run_record(record: ConflictAwarePriorityRunRecord) -> dict[str, obj
         "makespan": record.makespan,
         "conflict_count": record.conflict_count,
         "error_message": record.error_message,
+        "catalogue_role": record.catalogue_role,
+        "catalogue_seed": record.catalogue_seed,
     }
 
     if record.pp_search_metrics is not None:
