@@ -1,0 +1,4 @@
+comparison,left_strategy,right_strategy,common_success_count,mean_soc_diff,median_soc_diff,max_abs_soc_diff,left_better_count,equal_count,right_better_count,mean_makespan_diff,median_makespan_diff,soc_diff_definition,makespan_diff_definition
+fixed_vs_spf,fixed,spf,27,40.74074074074074,0,719,0,23,4,0,0,left_soc - right_soc (positive => right better),left_makespan - right_makespan (positive => right better)
+fixed_vs_lpf,fixed,lpf,27,-3.4074074074074074,0,55,2,22,3,0.07407407407407407,0,left_soc - right_soc (positive => right better),left_makespan - right_makespan (positive => right better)
+spf_vs_lpf,spf,lpf,27,-44.148148148148145,0,719,5,20,2,0.07407407407407407,0,left_soc - right_soc (positive => right better),left_makespan - right_makespan (positive => right better)
