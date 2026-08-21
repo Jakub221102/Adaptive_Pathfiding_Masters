@@ -60,8 +60,8 @@ INSTANCE_IDS: tuple[str, ...] | None = None
 SMOKE_INSTANCE_IDS: tuple[str, ...] = ("AR0204SR_n05_low_000",)
 SMOKE_K = 2
 
-RESUME = True
-RESET_RESULTS = False
+RESUME = False
+RESET_RESULTS = True
 SAVE_AFTER_EACH_RUN = True
 STOP_ON_ERROR = False
 
