@@ -37,6 +37,11 @@ INTERACTION_MEDIUM_MIN_CONFLICTS = 1
 INTERACTION_MEDIUM_MAX_CONFLICTS = 2
 INTERACTION_HIGH_MIN_CONFLICTS = 3
 
+CATALOGUE_ROLE_PRIMARY = "primary"
+CATALOGUE_ROLE_HELD_OUT = "held_out_validation"
+HELD_OUT_CATALOGUE_GENERATION_VERSION = "MAPF-7.6"
+DEFAULT_HELD_OUT_SEED = 2027
+
 
 @dataclass(frozen=True, slots=True)
 class MAPFBenchmarkInstance:
@@ -70,6 +75,10 @@ class MAPFBenchmarkManifest:
     interaction_medium_min_conflicts: int = INTERACTION_MEDIUM_MIN_CONFLICTS
     interaction_medium_max_conflicts: int = INTERACTION_MEDIUM_MAX_CONFLICTS
     interaction_high_min_conflicts: int = INTERACTION_HIGH_MIN_CONFLICTS
+
+    catalogue_role: str = CATALOGUE_ROLE_PRIMARY
+    generation_version: str | None = None
+    primary_manifest_reference: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -318,8 +327,46 @@ def _make_instance_id(
     agent_count: int,
     interaction_level: MAPFInteractionLevel,
     sequence: int,
+    *,
+    held_out: bool = False,
 ) -> str:
-    return f"{map_stem}_n{agent_count:02d}_{interaction_level.value}_{sequence:03d}"
+    prefix = f"{map_stem}_HO" if held_out else map_stem
+    return f"{prefix}_n{agent_count:02d}_{interaction_level.value}_{sequence:03d}"
+
+
+def benchmark_scenario_set_signature(scenario_indices: Sequence[int]) -> tuple[int, ...]:
+    """Unordered scenario-index set identity used for duplicate detection."""
+    return _candidate_signature(scenario_indices)
+
+
+def collect_scenario_set_signatures_by_agent_count(
+    instances: Sequence[MAPFBenchmarkInstance],
+) -> dict[int, set[tuple[int, ...]]]:
+    signatures_by_agent_count: dict[int, set[tuple[int, ...]]] = {}
+    for instance in instances:
+        signatures_by_agent_count.setdefault(instance.agent_count, set()).add(
+            benchmark_scenario_set_signature(instance.scenario_indices)
+        )
+    return signatures_by_agent_count
+
+
+def instance_agent_position_signature(
+    scenarios: Sequence[Scenario],
+    scenario_indices: Sequence[int],
+) -> tuple[tuple[int, int, int, int], ...]:
+    """Ordered (start_row, start_col, goal_row, goal_col) per agent."""
+    signature: list[tuple[int, int, int, int]] = []
+    for scenario_index in scenario_indices:
+        scenario = scenarios[scenario_index]
+        signature.append(
+            (
+                scenario.start.row,
+                scenario.start.col,
+                scenario.goal.row,
+                scenario.goal.col,
+            )
+        )
+    return tuple(signature)
 
 
 def _candidate_signature(scenario_indices: Sequence[int]) -> tuple[int, ...]:
@@ -597,6 +644,8 @@ def _sample_benchmark_instances(
     ]
     | None = None,
     accepted_instance_callback: Callable[[MAPFBenchmarkInstance, int], None] | None = None,
+    excluded_signatures: frozenset[tuple[int, ...]] | None = None,
+    held_out: bool = False,
 ) -> MAPFBenchmarkGenerationResult:
     if agent_count <= 0:
         raise ValueError("agent_count must be positive")
@@ -659,6 +708,8 @@ def _sample_benchmark_instances(
         signature = _candidate_signature(sampled_indices)
         if signature in accepted_signatures:
             continue
+        if excluded_signatures is not None and signature in excluded_signatures:
+            continue
 
         evaluation = _evaluate_candidate(
             grid_map=grid_map,
@@ -685,6 +736,7 @@ def _sample_benchmark_instances(
                 agent_count=agent_count,
                 interaction_level=level,
                 sequence=sequence_by_level[level],
+                held_out=held_out,
             ),
             agent_count=evaluation.agent_count,
             interaction_level=evaluation.interaction_level,
@@ -755,6 +807,8 @@ def generate_benchmark_instances_from_precomputed(
     ]
     | None = None,
     accepted_instance_callback: Callable[[MAPFBenchmarkInstance, int], None] | None = None,
+    excluded_signatures: frozenset[tuple[int, ...]] | None = None,
+    held_out: bool = False,
 ) -> MAPFBenchmarkGenerationResult:
     return _sample_benchmark_instances(
         grid_map=grid_map,
@@ -769,6 +823,8 @@ def generate_benchmark_instances_from_precomputed(
         sampling_progress_every=sampling_progress_every,
         sampling_progress_callback=sampling_progress_callback,
         accepted_instance_callback=accepted_instance_callback,
+        excluded_signatures=excluded_signatures,
+        held_out=held_out,
     )
 
 
@@ -1070,6 +1126,284 @@ def generate_benchmark_manifest(
     )
 
 
+def generate_held_out_benchmark_manifest(
+    grid_map: GridMap,
+    scenarios: Sequence[Scenario],
+    scenario_name: str,
+    primary_manifest: MAPFBenchmarkManifest,
+    *,
+    agent_counts: Sequence[int] = (5, 10, 20),
+    instances_per_level: int = 3,
+    max_timestep: int | None = None,
+    seed: int = DEFAULT_HELD_OUT_SEED,
+    min_reference_length: float | None = None,
+    max_attempts: int = 5000,
+    source_pool: MAPFBenchmarkSourcePool | None = None,
+    primary_manifest_reference: str | None = None,
+    precompute_progress_every: int = 0,
+    precompute_progress_callback: Callable[[StaticPrecomputeProgress], None] | None = None,
+    accepted_instance_callback: Callable[[MAPFBenchmarkInstance, int], None] | None = None,
+    generation_start_callback: Callable[[int], None] | None = None,
+) -> MAPFBenchmarkManifestGenerationResult:
+    """Generate a held-out validation catalogue excluding primary scenario sets."""
+    if seed == primary_manifest.seed:
+        raise ValueError(
+            "Held-out seed must differ from the primary catalogue seed "
+            f"({primary_manifest.seed})."
+        )
+
+    resolved_max_timestep = (
+        primary_manifest.max_timestep if max_timestep is None else max_timestep
+    )
+    resolved_min_reference_length = (
+        primary_manifest.min_reference_length
+        if min_reference_length is None
+        else min_reference_length
+    )
+
+    if source_pool is None:
+        source_pool = prepare_benchmark_source_pool(
+            grid_map=grid_map,
+            scenarios=scenarios,
+            min_reference_length=resolved_min_reference_length,
+            max_timestep=resolved_max_timestep,
+            precompute_progress_every=precompute_progress_every,
+            precompute_progress_callback=precompute_progress_callback,
+        )
+
+    primary_signatures_by_agent_count = collect_scenario_set_signatures_by_agent_count(
+        primary_manifest.instances
+    )
+
+    all_instances: list[MAPFBenchmarkInstance] = []
+    attempts_by_agent_count: dict[int, int] = {}
+
+    for agent_count in agent_counts:
+        if agent_count <= 0:
+            raise ValueError("agent_counts must contain only positive values")
+
+        if generation_start_callback is not None:
+            generation_start_callback(agent_count)
+
+        excluded = frozenset(
+            primary_signatures_by_agent_count.get(agent_count, set())
+        )
+        result = generate_benchmark_instances_from_precomputed(
+            grid_map=grid_map,
+            scenarios=scenarios,
+            agent_count=agent_count,
+            instances_per_level=instances_per_level,
+            max_timestep=resolved_max_timestep,
+            seed=seed,
+            max_attempts=max_attempts,
+            source_pool=source_pool,
+            accepted_instance_callback=accepted_instance_callback,
+            excluded_signatures=excluded,
+            held_out=True,
+        )
+        all_instances.extend(result.instances)
+        attempts_by_agent_count[agent_count] = result.attempts
+
+    manifest = MAPFBenchmarkManifest(
+        map_name=grid_map.name,
+        scenario_name=scenario_name,
+        seed=seed,
+        max_timestep=resolved_max_timestep,
+        min_reference_length=resolved_min_reference_length,
+        instances=tuple(all_instances),
+        interaction_low_max_conflicts=primary_manifest.interaction_low_max_conflicts,
+        interaction_medium_min_conflicts=primary_manifest.interaction_medium_min_conflicts,
+        interaction_medium_max_conflicts=primary_manifest.interaction_medium_max_conflicts,
+        interaction_high_min_conflicts=primary_manifest.interaction_high_min_conflicts,
+        catalogue_role=CATALOGUE_ROLE_HELD_OUT,
+        generation_version=HELD_OUT_CATALOGUE_GENERATION_VERSION,
+        primary_manifest_reference=primary_manifest_reference,
+    )
+    return MAPFBenchmarkManifestGenerationResult(
+        manifest=manifest,
+        attempts_by_agent_count=attempts_by_agent_count,
+        source_pool=source_pool,
+    )
+
+
+def validate_held_out_catalogue(
+    held_out_manifest: MAPFBenchmarkManifest,
+    primary_manifest: MAPFBenchmarkManifest,
+    *,
+    scenarios: Sequence[Scenario] | None = None,
+    grid_map: GridMap | None = None,
+    agent_counts: Sequence[int] = (5, 10, 20),
+    instances_per_level: int = 3,
+) -> None:
+    """Validate held-out catalogue structure without running any MAPF solver."""
+    expected_total = len(agent_counts) * len(MAPFInteractionLevel) * instances_per_level
+    if held_out_manifest.catalogue_role != CATALOGUE_ROLE_HELD_OUT:
+        raise ValueError(
+            f"Expected catalogue_role={CATALOGUE_ROLE_HELD_OUT!r}, "
+            f"found {held_out_manifest.catalogue_role!r}"
+        )
+    if len(held_out_manifest.instances) != expected_total:
+        raise ValueError(
+            f"Expected {expected_total} held-out instances, "
+            f"found {len(held_out_manifest.instances)}"
+        )
+
+    held_out_ids = [instance.instance_id for instance in held_out_manifest.instances]
+    if len(set(held_out_ids)) != len(held_out_ids):
+        raise ValueError("Duplicate held-out instance IDs found")
+
+    primary_ids = {instance.instance_id for instance in primary_manifest.instances}
+    overlap_ids = set(held_out_ids) & primary_ids
+    if overlap_ids:
+        raise ValueError(
+            f"Held-out instance IDs overlap primary catalogue: {sorted(overlap_ids)}"
+        )
+
+    for instance_id in held_out_ids:
+        if "_HO_" not in instance_id:
+            raise ValueError(
+                f"Held-out instance ID missing _HO_ marker: {instance_id}"
+            )
+
+    if held_out_manifest.map_name != primary_manifest.map_name:
+        raise ValueError("Held-out map_name differs from primary manifest")
+    if held_out_manifest.scenario_name != primary_manifest.scenario_name:
+        raise ValueError("Held-out scenario_name differs from primary manifest")
+    if held_out_manifest.max_timestep != primary_manifest.max_timestep:
+        raise ValueError("Held-out max_timestep differs from primary manifest")
+    if held_out_manifest.min_reference_length != primary_manifest.min_reference_length:
+        raise ValueError("Held-out min_reference_length differs from primary manifest")
+    if held_out_manifest.interaction_low_max_conflicts != (
+        primary_manifest.interaction_low_max_conflicts
+    ):
+        raise ValueError("Held-out interaction thresholds differ from primary manifest")
+    if held_out_manifest.seed == primary_manifest.seed:
+        raise ValueError("Held-out seed must differ from primary catalogue seed")
+
+    primary_signatures_by_agent_count = collect_scenario_set_signatures_by_agent_count(
+        primary_manifest.instances
+    )
+    held_out_position_signatures: set[tuple[tuple[int, int, int, int], ...]] = set()
+    primary_position_signatures: set[tuple[tuple[int, int, int, int], ...]] = set()
+    seen_held_out_signatures_by_agent: dict[int, set[tuple[int, ...]]] = {}
+
+    if scenarios is not None:
+        for instance in primary_manifest.instances:
+            primary_position_signatures.add(
+                instance_agent_position_signature(scenarios, instance.scenario_indices)
+            )
+
+    counts_by_agent_level: dict[tuple[int, MAPFInteractionLevel], list[MAPFBenchmarkInstance]] = {
+        (agent_count, level): []
+        for agent_count in agent_counts
+        for level in MAPFInteractionLevel
+    }
+
+    for instance in held_out_manifest.instances:
+        if instance.agent_count not in agent_counts:
+            raise ValueError(
+                f"Unexpected agent_count in held-out manifest: {instance.agent_count}"
+            )
+        if len(instance.scenario_indices) != instance.agent_count:
+            raise ValueError(
+                f"Instance {instance.instance_id} has "
+                f"{len(instance.scenario_indices)} scenario indices "
+                f"for agent_count={instance.agent_count}"
+            )
+        if len(set(instance.scenario_indices)) != len(instance.scenario_indices):
+            raise ValueError(
+                f"Duplicate scenario indices in instance {instance.instance_id}"
+            )
+
+        signature = benchmark_scenario_set_signature(instance.scenario_indices)
+        seen_for_agent = seen_held_out_signatures_by_agent.setdefault(
+            instance.agent_count, set()
+        )
+        if signature in seen_for_agent:
+            raise ValueError(
+                f"Duplicate held-out scenario set for agent_count="
+                f"{instance.agent_count}: {signature}"
+            )
+        seen_for_agent.add(signature)
+
+        primary_for_agent = primary_signatures_by_agent_count.get(instance.agent_count, set())
+        if signature in primary_for_agent:
+            raise ValueError(
+                f"Held-out instance {instance.instance_id} duplicates primary "
+                f"scenario set for agent_count={instance.agent_count}: {signature}"
+            )
+
+        if scenarios is not None:
+            position_signature = instance_agent_position_signature(
+                scenarios, instance.scenario_indices
+            )
+            if position_signature in held_out_position_signatures:
+                raise ValueError(
+                    f"Duplicate held-out agent position signature: {instance.instance_id}"
+                )
+            held_out_position_signatures.add(position_signature)
+            if position_signature in primary_position_signatures:
+                raise ValueError(
+                    f"Held-out instance {instance.instance_id} duplicates primary "
+                    "agent (start, goal) assignment"
+                )
+
+            if grid_map is not None and not _validate_candidate_indices(
+                instance.scenario_indices, scenarios, grid_map
+            ):
+                raise ValueError(
+                    f"Invalid starts/goals for held-out instance {instance.instance_id}"
+                )
+
+        if not _interaction_matches_manifest_level(instance):
+            raise ValueError(
+                f"Instance {instance.instance_id} interaction label "
+                f"{instance.interaction_level.name} does not match "
+                f"conflict_count={instance.independent_conflict_count}"
+            )
+
+        counts_by_agent_level[(instance.agent_count, instance.interaction_level)].append(
+            instance
+        )
+
+    for agent_count in agent_counts:
+        agent_instances = [
+            instance
+            for instance in held_out_manifest.instances
+            if instance.agent_count == agent_count
+        ]
+        expected_per_agent = len(MAPFInteractionLevel) * instances_per_level
+        if len(agent_instances) != expected_per_agent:
+            raise ValueError(
+                f"Expected {expected_per_agent} held-out instances for "
+                f"agent_count={agent_count}, found {len(agent_instances)}"
+            )
+
+        for level in MAPFInteractionLevel:
+            level_instances = counts_by_agent_level[(agent_count, level)]
+            if len(level_instances) != instances_per_level:
+                raise ValueError(
+                    f"Expected {instances_per_level} {level.name} held-out instances "
+                    f"for agent_count={agent_count}, found {len(level_instances)}"
+                )
+
+
+def _interaction_matches_manifest_level(instance: MAPFBenchmarkInstance) -> bool:
+    count = instance.independent_conflict_count
+    level = instance.interaction_level
+    if level == MAPFInteractionLevel.LOW:
+        return count == INTERACTION_LOW_MAX_CONFLICTS
+    if level == MAPFInteractionLevel.MEDIUM:
+        return (
+            INTERACTION_MEDIUM_MIN_CONFLICTS
+            <= count
+            <= INTERACTION_MEDIUM_MAX_CONFLICTS
+        )
+    if level == MAPFInteractionLevel.HIGH:
+        return count >= INTERACTION_HIGH_MIN_CONFLICTS
+    return False
+
+
 def _instance_to_json(instance: MAPFBenchmarkInstance) -> dict[str, object]:
     return {
         "instance_id": instance.instance_id,
@@ -1101,7 +1435,7 @@ def _instance_from_json(data: dict[str, object]) -> MAPFBenchmarkInstance:
 
 
 def _manifest_to_json(manifest: MAPFBenchmarkManifest) -> dict[str, object]:
-    return {
+    payload: dict[str, object] = {
         "map_name": manifest.map_name,
         "scenario_name": manifest.scenario_name,
         "seed": manifest.seed,
@@ -1115,6 +1449,13 @@ def _manifest_to_json(manifest: MAPFBenchmarkManifest) -> dict[str, object]:
         },
         "instances": [_instance_to_json(instance) for instance in manifest.instances],
     }
+    if manifest.catalogue_role != CATALOGUE_ROLE_PRIMARY:
+        payload["catalogue_role"] = manifest.catalogue_role
+    if manifest.generation_version is not None:
+        payload["generation_version"] = manifest.generation_version
+    if manifest.primary_manifest_reference is not None:
+        payload["primary_manifest_reference"] = manifest.primary_manifest_reference
+    return payload
 
 
 def _manifest_from_json(data: dict[str, object]) -> MAPFBenchmarkManifest:
@@ -1148,6 +1489,17 @@ def _manifest_from_json(data: dict[str, object]) -> MAPFBenchmarkManifest:
         ),
         interaction_high_min_conflicts=int(
             thresholds.get("high_min", INTERACTION_HIGH_MIN_CONFLICTS)
+        ),
+        catalogue_role=str(data.get("catalogue_role", CATALOGUE_ROLE_PRIMARY)),
+        generation_version=(
+            str(data["generation_version"])
+            if data.get("generation_version") is not None
+            else None
+        ),
+        primary_manifest_reference=(
+            str(data["primary_manifest_reference"])
+            if data.get("primary_manifest_reference") is not None
+            else None
         ),
     )
 
