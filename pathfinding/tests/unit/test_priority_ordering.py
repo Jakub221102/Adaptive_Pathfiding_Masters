@@ -3,6 +3,7 @@ import pytest
 from pathfinding.src.algorithms.mapf.conflicts import detect_conflicts
 from pathfinding.src.algorithms.mapf.models import MAPFAgent, MAPFScenario
 from pathfinding.src.algorithms.mapf.priority_ordering import (
+    longest_path_first_order,
     random_priority_order,
     shortest_path_first_order,
 )
@@ -236,6 +237,147 @@ def test_shortest_path_first_works_with_plan_prioritized() -> None:
         _agent(agent_id=1, start_row=1, start_col=0, goal_row=1, goal_col=3),
     )
     reordered = shortest_path_first_order(
+        grid_map=grid_map,
+        scenario=scenario,
+        max_timestep=6,
+    )
+
+    result = plan_prioritized(grid_map=grid_map, scenario=reordered, max_timestep=6)
+
+    assert result.success is True
+    assert len(result.paths) == len(reordered.agents)
+    assert detect_conflicts(result.paths) == ()
+    for path, agent in zip(result.paths, reordered.agents, strict=True):
+        assert path.agent_id == agent.agent_id
+
+
+def test_longest_path_first_orders_by_descending_independent_cost() -> None:
+    grid_map = build_grid_map([[0] * 21])
+    agent_a = _agent(agent_id=1, start_row=0, start_col=0, goal_row=0, goal_col=10)
+    agent_b = _agent(agent_id=2, start_row=0, start_col=0, goal_row=0, goal_col=20)
+    agent_c = _agent(agent_id=3, start_row=0, start_col=0, goal_row=0, goal_col=10)
+    agent_d = _agent(agent_id=4, start_row=0, start_col=0, goal_row=0, goal_col=15)
+    scenario = _scenario(agent_a, agent_b, agent_c, agent_d)
+    max_timestep = 25
+
+    reordered = longest_path_first_order(
+        grid_map=grid_map,
+        scenario=scenario,
+        max_timestep=max_timestep,
+    )
+
+    costs = [
+        _independent_cost(grid_map, agent, max_timestep)
+        for agent in reordered.agents
+    ]
+    assert costs == sorted(costs, reverse=True)
+    assert tuple(agent.agent_id for agent in reordered.agents) == (2, 4, 1, 3)
+
+
+def test_longest_path_first_tie_breaks_by_original_scenario_index() -> None:
+    grid_map = build_grid_map([[0, 0, 0, 0, 0]])
+    agent_a = _agent(agent_id=9, start_row=0, start_col=0, goal_row=0, goal_col=4)
+    agent_b = _agent(agent_id=2, start_row=0, start_col=0, goal_row=0, goal_col=1)
+    agent_c = _agent(agent_id=8, start_row=0, start_col=0, goal_row=0, goal_col=4)
+    scenario = _scenario(agent_a, agent_b, agent_c)
+    max_timestep = 6
+
+    reordered = longest_path_first_order(
+        grid_map=grid_map,
+        scenario=scenario,
+        max_timestep=max_timestep,
+    )
+
+    assert _independent_cost(grid_map, agent_a, max_timestep) == 4
+    assert _independent_cost(grid_map, agent_c, max_timestep) == 4
+    assert tuple(agent.agent_id for agent in reordered.agents) == (9, 8, 2)
+
+
+def test_longest_path_first_does_not_mutate_original_scenario() -> None:
+    grid_map = build_grid_map([[0, 0, 0]])
+    scenario = _scenario(
+        _agent(agent_id=0, start_row=0, start_col=0, goal_row=0, goal_col=2),
+        _agent(agent_id=1, start_row=0, start_col=0, goal_row=0, goal_col=1),
+    )
+    original_order = scenario.agents
+
+    longest_path_first_order(
+        grid_map=grid_map,
+        scenario=scenario,
+        max_timestep=5,
+    )
+
+    assert scenario.agents == original_order
+
+
+def test_longest_path_first_contains_each_original_agent_once() -> None:
+    agents = (
+        _agent(agent_id=0, start_row=0, start_col=0, goal_row=0, goal_col=2),
+        _agent(agent_id=1, start_row=0, start_col=0, goal_row=0, goal_col=1),
+        _agent(agent_id=2, start_row=0, start_col=0, goal_row=0, goal_col=3),
+    )
+    scenario = _scenario(*agents)
+    grid_map = build_grid_map([[0, 0, 0, 0]])
+
+    reordered = longest_path_first_order(
+        grid_map=grid_map,
+        scenario=scenario,
+        max_timestep=6,
+    )
+
+    assert len(reordered.agents) == len(agents)
+    for agent in agents:
+        assert agent in reordered.agents
+
+
+def test_longest_path_first_is_deterministic() -> None:
+    grid_map = build_grid_map([[0, 0, 0, 0, 0], [0, 0, 0, 0, 0]])
+    scenario = _scenario(
+        _agent(agent_id=0, start_row=0, start_col=0, goal_row=0, goal_col=4),
+        _agent(agent_id=1, start_row=1, start_col=0, goal_row=1, goal_col=2),
+        _agent(agent_id=2, start_row=0, start_col=0, goal_row=1, goal_col=4),
+    )
+
+    first = longest_path_first_order(
+        grid_map=grid_map,
+        scenario=scenario,
+        max_timestep=8,
+    )
+    second = longest_path_first_order(
+        grid_map=grid_map,
+        scenario=scenario,
+        max_timestep=8,
+    )
+
+    assert first.agents == second.agents
+
+
+def test_longest_path_first_raises_when_independent_path_missing() -> None:
+    grid_map = build_grid_map([[0, 0, 0]])
+    scenario = _scenario(
+        _agent(agent_id=4, start_row=0, start_col=0, goal_row=0, goal_col=2),
+    )
+
+    with pytest.raises(ValueError, match="agent_id=4"):
+        longest_path_first_order(
+            grid_map=grid_map,
+            scenario=scenario,
+            max_timestep=1,
+        )
+
+
+def test_longest_path_first_works_with_plan_prioritized() -> None:
+    grid_map = build_grid_map(
+        [
+            [0, 0, 0, 0],
+            [0, 0, 0, 0],
+        ]
+    )
+    scenario = _scenario(
+        _agent(agent_id=0, start_row=0, start_col=0, goal_row=0, goal_col=3),
+        _agent(agent_id=1, start_row=1, start_col=0, goal_row=1, goal_col=3),
+    )
+    reordered = longest_path_first_order(
         grid_map=grid_map,
         scenario=scenario,
         max_timestep=6,

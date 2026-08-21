@@ -14,11 +14,11 @@ def random_priority_order(scenario: MAPFScenario, seed: int) -> MAPFScenario:
     return MAPFScenario(agents=tuple(agents))
 
 
-def shortest_path_first_order(
+def _independent_path_costs(
     grid_map: GridMap,
     scenario: MAPFScenario,
     max_timestep: int,
-) -> MAPFScenario:
+) -> tuple[tuple[int, int, MAPFAgent], ...]:
     if max_timestep < 0:
         raise ValueError("max_timestep must be non-negative")
 
@@ -40,5 +40,28 @@ def shortest_path_first_order(
         independent_cost = len(path.states) - 1
         ranked.append((independent_cost, original_index, agent))
 
-    ranked.sort(key=lambda item: (item[0], item[1]))
+    return tuple(ranked)
+
+
+def shortest_path_first_order(
+    grid_map: GridMap,
+    scenario: MAPFScenario,
+    max_timestep: int,
+) -> MAPFScenario:
+    ranked = sorted(
+        _independent_path_costs(grid_map, scenario, max_timestep),
+        key=lambda item: (item[0], item[1]),
+    )
+    return MAPFScenario(agents=tuple(agent for _, _, agent in ranked))
+
+
+def longest_path_first_order(
+    grid_map: GridMap,
+    scenario: MAPFScenario,
+    max_timestep: int,
+) -> MAPFScenario:
+    ranked = sorted(
+        _independent_path_costs(grid_map, scenario, max_timestep),
+        key=lambda item: (-item[0], item[1]),
+    )
     return MAPFScenario(agents=tuple(agent for _, _, agent in ranked))
