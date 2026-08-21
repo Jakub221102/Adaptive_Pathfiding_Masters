@@ -1,0 +1,461 @@
+"""Execute MAPF-6 Random Priority pilot on the stored MAPF-5A catalogue.
+
+Open in PyCharm and press Run. No command-line arguments required.
+Edit the MAPF-6 LOCAL BENCHMARK CONFIGURATION block below to change settings.
+"""
+
+from __future__ import annotations
+
+import logging
+import sys
+import time
+import traceback
+from collections.abc import Sequence
+from pathlib import Path
+
+_SCRIPTS_DIR = Path(__file__).resolve().parent
+_REPO_ROOT = _SCRIPTS_DIR.parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from pathfinding.src.experiments.mapf_benchmark_execution import (
+    TERMINATION_FAILURE,
+    TERMINATION_SUCCESS,
+)
+from pathfinding.src.experiments.mapf_benchmark_instances import load_benchmark_manifest
+from pathfinding.src.experiments.mapf_random_priority_execution import (
+    RandomPriorityCheckpointStore,
+    RandomPriorityRunKey,
+    RandomPriorityRunPlanEntry,
+    RandomPriorityRunRecord,
+    build_random_priority_run_plan,
+    execute_random_priority_plan_entry,
+    run_key,
+    validate_random_priority_run_record,
+)
+from pathfinding.src.loaders.map_loader import load_moving_ai_map
+from pathfinding.src.loaders.scen_loader import load_moving_ai_scenarios
+
+# ============================================================
+# MAPF-6 RANDOM PRIORITY LOCAL BENCHMARK CONFIGURATION
+# ============================================================
+
+MANIFEST_PATH = (
+    _REPO_ROOT / "pathfinding" / "results" / "mapf_benchmarks" / "AR0204SR_manifest.json"
+)
+MAP_PATH = _REPO_ROOT / "Data" / "bg512-map" / "AR0204SR.map"
+SCEN_PATH = _REPO_ROOT / "Data" / "bg512-scen" / "AR0204SR.map.scen"
+
+# Set SMOKE_MODE=True for a tiny checkpoint/resume test (1 instance, K=2).
+SMOKE_MODE = False
+
+K = 10
+BASE_SEED = 2026
+MAX_TIMESTEP: int | None = None
+
+AGENT_COUNTS: tuple[int, ...] | None = (5, 10, 20)
+INTERACTION_LEVELS: tuple[str, ...] | None = ("low", "medium", "high")
+INSTANCE_IDS: tuple[str, ...] | None = None
+
+SMOKE_INSTANCE_IDS: tuple[str, ...] = ("AR0204SR_n05_low_000",)
+SMOKE_K = 2
+
+RESUME = True
+RESET_RESULTS = False
+SAVE_AFTER_EACH_RUN = True
+STOP_ON_ERROR = False
+
+RESULTS_DIR = _REPO_ROOT / "pathfinding" / "results" / "mapf_random_priority_pilot"
+RESULTS_CSV = RESULTS_DIR / "results.csv"
+RESULTS_JSONL = RESULTS_DIR / "results_details.jsonl"
+LOG_FILE = RESULTS_DIR / "run.log"
+
+# ============================================================
+# END CONFIGURATION
+# ============================================================
+
+
+class ElapsedTimer:
+    def __init__(self) -> None:
+        self._start = time.perf_counter()
+
+    def elapsed(self) -> float:
+        return time.perf_counter() - self._start
+
+    def stamp(self) -> str:
+        elapsed = self.elapsed()
+        minutes = int(elapsed // 60)
+        seconds = elapsed - minutes * 60
+        return f"[{minutes:02d}:{seconds:06.3f}]"
+
+
+def _effective_k() -> int:
+    return SMOKE_K if SMOKE_MODE else K
+
+
+def _effective_instance_ids() -> tuple[str, ...] | None:
+    if SMOKE_MODE:
+        return SMOKE_INSTANCE_IDS
+    return INSTANCE_IDS
+
+
+def _setup_logging(log_file: Path, *, append: bool) -> logging.Logger:
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+
+    logger = logging.getLogger("mapf_random_priority_execution")
+    logger.setLevel(logging.INFO)
+    logger.handlers.clear()
+    logger.propagate = False
+
+    formatter = logging.Formatter("%(message)s")
+
+    stream_handler = logging.StreamHandler(sys.stdout)
+    stream_handler.setFormatter(formatter)
+    stream_handler.flush = sys.stdout.flush  # type: ignore[method-assign]
+    logger.addHandler(stream_handler)
+
+    file_mode = "a" if append else "w"
+    file_handler = logging.FileHandler(log_file, mode=file_mode, encoding="utf-8")
+    file_handler.setFormatter(formatter)
+
+    original_emit = file_handler.emit
+
+    def flushing_emit(record: logging.LogRecord) -> None:
+        original_emit(record)
+        file_handler.flush()
+
+    file_handler.emit = flushing_emit  # type: ignore[method-assign]
+    logger.addHandler(file_handler)
+
+    return logger
+
+
+def _log(logger: logging.Logger, timer: ElapsedTimer, message: str) -> None:
+    logger.info(f"{timer.stamp()} {message}")
+
+
+def _log_blank(logger: logging.Logger) -> None:
+    logger.info("")
+
+
+def _count_by_outcome(
+    records: Sequence[RandomPriorityRunRecord],
+) -> dict[str, int]:
+    counts = {
+        TERMINATION_SUCCESS: 0,
+        TERMINATION_FAILURE: 0,
+    }
+    for record in records:
+        counts[record.termination_reason] = (
+            counts.get(record.termination_reason, 0) + 1
+        )
+    return counts
+
+
+def _print_startup_summary(
+    logger: logging.Logger,
+    *,
+    manifest_path: Path,
+    k: int,
+    base_seed: int,
+    selected_instance_count: int,
+    total_runs: int,
+    already_completed: int,
+    remaining: int,
+    smoke_mode: bool,
+) -> None:
+    _log_blank(logger)
+    logger.info("MAPF-6 RANDOM PRIORITY PILOT")
+    _log_blank(logger)
+    logger.info(f"Manifest:\n  {manifest_path}")
+    _log_blank(logger)
+    logger.info(f"Smoke mode: {smoke_mode}")
+    logger.info(f"K (orderings per instance): {k}")
+    logger.info(f"Base seed: {base_seed}")
+    logger.info(f"Selected instances: {selected_instance_count}")
+    logger.info(f"Total planned runs: {total_runs}")
+    logger.info(f"Already completed: {already_completed}")
+    logger.info(f"Remaining: {remaining}")
+    logger.info(f"Resume: {RESUME}")
+    logger.info(f"Reset results: {RESET_RESULTS}")
+    logger.info(f"Save after each run: {SAVE_AFTER_EACH_RUN}")
+    logger.info(f"Stop on error: {STOP_ON_ERROR}")
+    _log_blank(logger)
+    logger.info("Execution order:")
+    logger.info("  For each instance (agent_count 5→10→20, LOW→MEDIUM→HIGH):")
+    logger.info("    ordering 0 .. K-1")
+    _log_blank(logger)
+    logger.info(f"Output directory: {RESULTS_DIR}")
+    logger.info(f"Results CSV: {RESULTS_CSV}")
+    logger.info(f"Results JSONL: {RESULTS_JSONL}")
+    logger.info(f"Log: {LOG_FILE}")
+    _log_blank(logger)
+
+
+def _print_run_banner(
+    logger: logging.Logger,
+    *,
+    run_number: int,
+    total_runs: int,
+    entry: RandomPriorityRunPlanEntry,
+    k: int,
+) -> None:
+    _log_blank(logger)
+    logger.info("=" * 60)
+    logger.info(f"RUN {run_number} / {total_runs}")
+    logger.info(f"Instance: {entry.instance.instance_id}")
+    logger.info(f"Agents: {entry.instance.agent_count}")
+    logger.info(f"Interaction: {entry.instance.interaction_level.name}")
+    logger.info(
+        f"Ordering: {entry.ordering.ordering_index + 1} / {k} "
+        f"(seed={entry.ordering.ordering_seed})"
+    )
+    logger.info(f"Agent order: {list(entry.ordering.agent_order)}")
+    logger.info("=" * 60)
+    _log_blank(logger)
+
+
+def _print_run_result(
+    logger: logging.Logger,
+    record: RandomPriorityRunRecord,
+) -> None:
+    logger.info("RESULT")
+    logger.info(f"success: {record.success}")
+    logger.info(f"termination_reason: {record.termination_reason}")
+    logger.info(f"execution_time_ms: {record.execution_time_ms:.2f}")
+    if record.success:
+        logger.info(f"SoC: {record.soc}")
+        logger.info(f"makespan: {record.makespan}")
+        logger.info(f"conflict_count: {record.conflict_count}")
+    if record.pp_search_metrics is not None:
+        logger.info(
+            "pp_low_level_searches: "
+            f"{record.pp_search_metrics.low_level_searches}"
+        )
+        logger.info(
+            "pp_agents_planned: "
+            f"{record.pp_search_metrics.agents_planned}"
+        )
+    _log_blank(logger)
+
+
+def _print_global_progress(
+    logger: logging.Logger,
+    timer: ElapsedTimer,
+    *,
+    completed: int,
+    total_runs: int,
+    records: Sequence[RandomPriorityRunRecord],
+) -> None:
+    counts = _count_by_outcome(records)
+    logger.info(
+        f"Completed: {completed} / {total_runs} | "
+        f"Succeeded: {counts[TERMINATION_SUCCESS]} | "
+        f"Failed: {counts[TERMINATION_FAILURE]} | "
+        f"Elapsed total: {timer.elapsed():.1f} s"
+    )
+    _log_blank(logger)
+
+
+def _print_completion_summary(
+    logger: logging.Logger,
+    timer: ElapsedTimer,
+    records: Sequence[RandomPriorityRunRecord],
+) -> None:
+    counts = _count_by_outcome(records)
+    _log_blank(logger)
+    logger.info("=" * 72)
+    logger.info("MAPF-6 RANDOM PRIORITY PILOT COMPLETE")
+    logger.info("=" * 72)
+    logger.info(f"Total runs: {len(records)}")
+    logger.info(f"Success: {counts[TERMINATION_SUCCESS]}")
+    logger.info(f"Failure: {counts[TERMINATION_FAILURE]}")
+    _log_blank(logger)
+    logger.info(f"Total elapsed: {timer.elapsed():.1f} s")
+    _log_blank(logger)
+
+
+def _print_interrupt_summary(
+    logger: logging.Logger,
+    timer: ElapsedTimer,
+    *,
+    completed: int,
+    total_runs: int,
+) -> None:
+    remaining = total_runs - completed
+    _log_blank(logger)
+    logger.info("=" * 72)
+    logger.info("BENCHMARK INTERRUPTED BY USER")
+    logger.info("=" * 72)
+    logger.info(f"Completed before interrupt: {completed} / {total_runs}")
+    logger.info(f"Remaining: {remaining}")
+    logger.info(f"Checkpointed results preserved in: {RESULTS_JSONL}")
+    logger.info(f"Flat CSV preserved in: {RESULTS_CSV}")
+    logger.info(f"Elapsed before interrupt: {timer.elapsed():.1f} s")
+    logger.info("Press Run again with RESUME=True to continue.")
+    _log_blank(logger)
+
+
+def run_random_priority_pilot() -> None:
+    timer = ElapsedTimer()
+
+    if RESET_RESULTS and RESUME:
+        raise ValueError("RESET_RESULTS=True cannot be combined with RESUME=True")
+
+    if not MANIFEST_PATH.is_file():
+        raise FileNotFoundError(f"Benchmark manifest not found: {MANIFEST_PATH}")
+
+    k = _effective_k()
+    instance_ids = _effective_instance_ids()
+
+    checkpoint = RandomPriorityCheckpointStore(
+        results_dir=RESULTS_DIR,
+        csv_path=RESULTS_CSV,
+        jsonl_path=RESULTS_JSONL,
+        reset_results=RESET_RESULTS,
+    )
+
+    append_log = RESUME and LOG_FILE.is_file() and not RESET_RESULTS
+    logger = _setup_logging(LOG_FILE, append=append_log)
+
+    manifest = load_benchmark_manifest(MANIFEST_PATH)
+    max_timestep = MAX_TIMESTEP if MAX_TIMESTEP is not None else manifest.max_timestep
+
+    plan = build_random_priority_run_plan(
+        manifest,
+        k=k,
+        base_seed=BASE_SEED,
+        agent_counts=AGENT_COUNTS,
+        interaction_levels=INTERACTION_LEVELS,
+        instance_ids=instance_ids,
+    )
+    total_runs = len(plan)
+    completed_keys = checkpoint.completed_keys() if RESUME else set()
+
+    already_completed = sum(
+        1
+        for entry in plan
+        if RandomPriorityRunKey(
+            entry.instance.instance_id,
+            entry.ordering.ordering_index,
+        )
+        in completed_keys
+    )
+    remaining = total_runs - already_completed
+
+    selected_instance_ids = {entry.instance.instance_id for entry in plan}
+    _print_startup_summary(
+        logger,
+        manifest_path=MANIFEST_PATH,
+        k=k,
+        base_seed=BASE_SEED,
+        selected_instance_count=len(selected_instance_ids),
+        total_runs=total_runs,
+        already_completed=already_completed,
+        remaining=remaining,
+        smoke_mode=SMOKE_MODE,
+    )
+
+    grid_map = load_moving_ai_map(MAP_PATH)
+    scenarios = load_moving_ai_scenarios(SCEN_PATH)
+    if grid_map.name != manifest.map_name:
+        raise ValueError(
+            f"map name mismatch: manifest expects {manifest.map_name!r}, "
+            f"loaded {grid_map.name!r}"
+        )
+
+    completed = 0
+    session_records: list[RandomPriorityRunRecord] = list(checkpoint.records.values())
+
+    try:
+        for run_number, entry in enumerate(plan, start=1):
+            key = RandomPriorityRunKey(
+                entry.instance.instance_id,
+                entry.ordering.ordering_index,
+            )
+            if RESUME and key in completed_keys:
+                logger.info(
+                    f"SKIP — already completed: {entry.instance.instance_id} / "
+                    f"ordering {entry.ordering.ordering_index}"
+                )
+                continue
+
+            _print_run_banner(
+                logger,
+                run_number=run_number,
+                total_runs=total_runs,
+                entry=entry,
+                k=k,
+            )
+            _log(logger, timer, "Run started")
+
+            run_start = time.perf_counter()
+            try:
+                record = execute_random_priority_plan_entry(
+                    grid_map=grid_map,
+                    scenarios=scenarios,
+                    entry=entry,
+                    base_seed=BASE_SEED,
+                    max_timestep=max_timestep,
+                )
+            except Exception as error:
+                execution_time_ms = (time.perf_counter() - run_start) * 1000.0
+                logger.info("UNEXPECTED ERROR")
+                logger.info(traceback.format_exc())
+                raise RuntimeError(
+                    f"Unexpected error for {entry.instance.instance_id} / "
+                    f"ordering {entry.ordering.ordering_index}: {error}"
+                ) from error
+
+            validate_random_priority_run_record(record)
+            _print_run_result(logger, record)
+
+            if SAVE_AFTER_EACH_RUN:
+                checkpoint.append_record(record)
+                completed_keys.add(run_key(record))
+                logger.info("CHECKPOINT SAVED")
+
+            session_records.append(record)
+            completed += 1
+            _print_global_progress(
+                logger,
+                timer,
+                completed=already_completed + completed,
+                total_runs=total_runs,
+                records=session_records,
+            )
+
+            if STOP_ON_ERROR and not record.success:
+                logger.info("Stopping because STOP_ON_ERROR=True and run failed.")
+                break
+
+    except KeyboardInterrupt:
+        _print_interrupt_summary(
+            logger,
+            timer,
+            completed=already_completed + completed,
+            total_runs=total_runs,
+        )
+        raise SystemExit(130)
+
+    if already_completed + completed < total_runs:
+        logger.info(
+            f"Stopped early: {already_completed + completed} / {total_runs} runs present"
+        )
+        return
+
+    _print_completion_summary(logger, timer, session_records)
+
+
+def main() -> None:
+    try:
+        run_random_priority_pilot()
+    except SystemExit:
+        raise
+    except Exception:
+        traceback.print_exc()
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
