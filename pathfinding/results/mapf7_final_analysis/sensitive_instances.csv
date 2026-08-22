@@ -1,0 +1,9 @@
+catalogue,instance_id,agent_count,interaction_level,independent_conflict_count,independent_conflict_pair_count,max_degree,cdf_h_soc,cdf_l_soc,spf_cd_soc,spf_soc,soc_range
+primary,AR0204SR_n20_high_001,20,high,10,10,4,5157,5046,4742,4742,415
+primary,AR0204SR_n10_high_001,10,high,3,3,3,3181,2962,2962,2962,219
+primary,AR0204SR_n10_high_000,10,high,10,10,4,2550,2485,2487,2487,65
+primary,AR0204SR_n10_high_002,10,high,4,4,3,3458,3415,3415,3415,43
+primary,AR0204SR_n05_high_002,5,high,3,3,3,1670,1668,1670,1670,2
+held_out,AR0204SR_HO_n10_high_000,10,high,5,5,4,2522,2786,2522,2522,264
+held_out,AR0204SR_HO_n05_medium_000,5,medium,2,2,2,1341,1343,1343,1343,2
+held_out,AR0204SR_HO_n20_medium_001,20,medium,2,2,2,4591,4593,4591,4591,2

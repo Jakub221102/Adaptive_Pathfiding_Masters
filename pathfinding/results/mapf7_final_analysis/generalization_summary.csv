@@ -1,0 +1,8 @@
+comparison,primary_left_better,primary_equal,primary_right_better,primary_mean_soc_diff,heldout_left_better,heldout_equal,heldout_right_better,heldout_mean_soc_diff,generalization_interpretation,combined_identical_soc,combined_identical_ordering,combined_differing_ordering
+cdf_h_vs_spf,0,23,4,27.40740740740741,1,26,0,-0.07407407407407407,mean effect direction differed between catalogues,,,
+cdf_l_vs_spf,2,24,1,11.11111111111111,0,25,2,9.851851851851851,partial replication; aggregate counts differ,,,
+cdf_h_vs_cdf_l,0,22,5,16.296296296296298,3,24,0,-9.925925925925926,direction reversed between catalogues,,,
+spf_cd_vs_spf,0,27,0,0,0,27,0,0,no practical SPF+CD benefit on either catalogue,,,
+strategy_soc_sensitivity,5,22,,5/27,3,24,,3/27,replicated sparse sensitivity,,,
+makespan_sensitivity,1,26,,1/27,0,27,,0/27,makespan less sensitive than SoC on both catalogues,,,
+spf_cd_ablation_identical_soc,27,,,27/27,27,,,27/27,primary identical ordering=27/27; held-out identical ordering=27/27; combined identical ordering=54/54,54/54,54/54,0/54

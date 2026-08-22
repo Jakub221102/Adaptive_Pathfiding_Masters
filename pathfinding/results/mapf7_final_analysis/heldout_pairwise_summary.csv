@@ -1,0 +1,5 @@
+comparison,left_strategy,right_strategy,common_success_count,mean_soc_diff,median_soc_diff,min_soc_diff,max_soc_diff,left_better_count,equal_count,right_better_count,soc_diff_definition
+cdf_h_vs_spf,CDF-H,SPF,27,-0.07407407407407407,0,-2,0,1,26,0,left_soc - right_soc (negative => left better)
+cdf_l_vs_spf,CDF-L,SPF,27,9.851851851851851,0,0,264,0,25,2,left_soc - right_soc (negative => left better)
+cdf_h_vs_cdf_l,CDF-H,CDF-L,27,-9.925925925925926,0,-264,0,3,24,0,left_soc - right_soc (negative => left better)
+spf_cd_vs_spf,SPF+CD,SPF,27,0,0,0,0,0,27,0,left_soc - right_soc (negative => left better)
