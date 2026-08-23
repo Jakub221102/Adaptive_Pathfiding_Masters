@@ -1,0 +1,28 @@
+instance_id,agent_count,interaction_level,K10_min_soc,K10_max_soc,K10_soc_range,K10_unique_soc_count,K20_min_soc,K20_max_soc,K20_soc_range,K20_unique_soc_count,delta_soc_range,new_soc_values_found_in_10_19,K10_makespan_range,K20_makespan_range,became_newly_soc_sensitive,became_newly_makespan_sensitive,new_internal_soc_without_range_increase
+AR0204SR_n05_low_000,5,low,1378,1378,0,1,1378,1378,0,1,0,[],0,0,False,False,False
+AR0204SR_n05_low_001,5,low,868,868,0,1,868,868,0,1,0,[],0,0,False,False,False
+AR0204SR_n05_low_002,5,low,878,878,0,1,878,878,0,1,0,[],0,0,False,False,False
+AR0204SR_n05_medium_000,5,medium,1299,1299,0,1,1299,1299,0,1,0,[],0,0,False,False,False
+AR0204SR_n05_medium_001,5,medium,1291,1291,0,1,1291,1291,0,1,0,[],0,0,False,False,False
+AR0204SR_n05_medium_002,5,medium,1396,1396,0,1,1396,1396,0,1,0,[],0,0,False,False,False
+AR0204SR_n05_high_000,5,high,1263,1263,0,1,1263,1263,0,1,0,[],0,0,False,False,False
+AR0204SR_n05_high_001,5,high,1664,1664,0,1,1664,1664,0,1,0,[],0,0,False,False,False
+AR0204SR_n05_high_002,5,high,1668,1670,2,2,1668,1670,2,2,0,[],2,2,False,False,False
+AR0204SR_n10_low_000,10,low,2594,2594,0,1,2594,2594,0,1,0,[],0,0,False,False,False
+AR0204SR_n10_low_001,10,low,2400,2400,0,1,2400,2400,0,1,0,[],0,0,False,False,False
+AR0204SR_n10_low_002,10,low,1862,1862,0,1,1862,1862,0,1,0,[],0,0,False,False,False
+AR0204SR_n10_medium_000,10,medium,2797,2935,138,2,2797,2935,138,2,0,[],0,0,False,False,False
+AR0204SR_n10_medium_001,10,medium,2567,2567,0,1,2567,2567,0,1,0,[],0,0,False,False,False
+AR0204SR_n10_medium_002,10,medium,1960,1960,0,1,1960,1960,0,1,0,[],0,0,False,False,False
+AR0204SR_n10_high_000,10,high,2485,2564,79,7,2485,2564,79,10,0,"[2505, 2550, 2562]",0,0,False,False,True
+AR0204SR_n10_high_001,10,high,2962,3183,221,3,2962,3183,221,3,0,[],0,0,False,False,False
+AR0204SR_n10_high_002,10,high,3415,3458,43,2,3415,3458,43,2,0,[],0,0,False,False,False
+AR0204SR_n20_low_000,20,low,5607,5607,0,1,5607,5607,0,1,0,[],0,0,False,False,False
+AR0204SR_n20_low_001,20,low,5969,5969,0,1,5969,5969,0,1,0,[],0,0,False,False,False
+AR0204SR_n20_low_002,20,low,4726,4726,0,1,4726,4726,0,1,0,[],0,0,False,False,False
+AR0204SR_n20_medium_000,20,medium,5190,5192,2,2,5190,5192,2,2,0,[],0,0,False,False,False
+AR0204SR_n20_medium_001,20,medium,5428,5428,0,1,5428,5428,0,1,0,[],0,0,False,False,False
+AR0204SR_n20_medium_002,20,medium,5565,5565,0,1,5565,5565,0,1,0,[],0,0,False,False,False
+AR0204SR_n20_high_000,20,high,4918,4918,0,1,4918,4918,0,1,0,[],0,0,False,False,False
+AR0204SR_n20_high_001,20,high,4742,5461,719,4,4742,5461,719,7,0,"[5046, 5157, 5284]",0,0,False,False,True
+AR0204SR_n20_high_002,20,high,4829,4829,0,1,4829,4829,0,1,0,[],0,0,False,False,False

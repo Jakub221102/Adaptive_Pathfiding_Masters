@@ -1,0 +1,8 @@
+instance_id,agent_count,interaction_level,K10_soc_min,K10_soc_max,K10_soc_range,K10_unique_socs,K20_soc_min,K20_soc_max,K20_soc_range,K20_unique_socs,new_soc_values_from_indices_10_19
+AR0204SR_n20_high_001,20,high,4742,5461,719,4,4742,5461,719,7,"[5046, 5157, 5284]"
+AR0204SR_n10_high_001,10,high,2962,3183,221,3,2962,3183,221,3,[]
+AR0204SR_n10_medium_000,10,medium,2797,2935,138,2,2797,2935,138,2,[]
+AR0204SR_n10_high_000,10,high,2485,2564,79,7,2485,2564,79,10,"[2505, 2550, 2562]"
+AR0204SR_n10_high_002,10,high,3415,3458,43,2,3415,3458,43,2,[]
+AR0204SR_n05_high_002,5,high,1668,1670,2,2,1668,1670,2,2,[]
+AR0204SR_n20_medium_000,20,medium,5190,5192,2,2,5190,5192,2,2,[]
