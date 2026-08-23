@@ -31,12 +31,24 @@ from pathfinding.src.experiments.mapf_benchmark_instances import (
 
 DEFAULT_RANDOM_PRIORITY_K = 10
 DEFAULT_RANDOM_PRIORITY_BASE_SEED = 2026
+SUPPLEMENTAL_ORDERING_INDEX_START = 10
+SUPPLEMENTAL_ORDERING_COUNT = 10
 
 MAIN_RANDOM_PRIORITY_RESULTS_DIR = Path(
     "pathfinding/results/mapf_random_priority_pilot"
 )
 MAIN_RANDOM_PRIORITY_CSV = MAIN_RANDOM_PRIORITY_RESULTS_DIR / "results.csv"
 MAIN_RANDOM_PRIORITY_JSONL = MAIN_RANDOM_PRIORITY_RESULTS_DIR / "results_details.jsonl"
+
+SUPPLEMENTAL_RANDOM_PRIORITY_RESULTS_DIR = Path(
+    "pathfinding/results/mapf_random_k20_supplemental"
+)
+SUPPLEMENTAL_RANDOM_PRIORITY_CSV = (
+    SUPPLEMENTAL_RANDOM_PRIORITY_RESULTS_DIR / "results.csv"
+)
+SUPPLEMENTAL_RANDOM_PRIORITY_JSONL = (
+    SUPPLEMENTAL_RANDOM_PRIORITY_RESULTS_DIR / "results_details.jsonl"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,6 +168,198 @@ def generate_unique_orderings_for_instance(
             attempt += 1
 
     return tuple(orderings)
+
+
+def load_historical_k10_records_by_instance(
+    jsonl_path: Path,
+) -> dict[str, dict[int, RandomPriorityRunRecord]]:
+    """Load K=10 historical records grouped by instance and ordering index."""
+    records = load_checkpoint_records(jsonl_path)
+    grouped: dict[str, dict[int, RandomPriorityRunRecord]] = {}
+
+    for record in records.values():
+        if record.ordering_index >= DEFAULT_RANDOM_PRIORITY_K:
+            continue
+        instance_records = grouped.setdefault(record.instance_id, {})
+        if record.ordering_index in instance_records:
+            raise RuntimeError(
+                f"Duplicate historical K=10 record for "
+                f"{record.instance_id} / ordering {record.ordering_index}"
+            )
+        instance_records[record.ordering_index] = record
+
+    return grouped
+
+
+def verify_historical_k10_orderings_match_reconstruction(
+    *,
+    instance: MAPFBenchmarkInstance,
+    base_seed: int,
+    historical_records: dict[int, RandomPriorityRunRecord],
+) -> tuple[tuple[int, ...], ...]:
+    reconstructed = generate_unique_orderings_for_instance(
+        instance=instance,
+        base_seed=base_seed,
+        k=DEFAULT_RANDOM_PRIORITY_K,
+    )
+
+    if len(historical_records) != DEFAULT_RANDOM_PRIORITY_K:
+        raise RuntimeError(
+            f"Historical K=10 records for {instance.instance_id} contain "
+            f"{len(historical_records)} orderings, expected "
+            f"{DEFAULT_RANDOM_PRIORITY_K}"
+        )
+
+    excluded_orders: list[tuple[int, ...]] = []
+    for ordering in reconstructed:
+        historical = historical_records.get(ordering.ordering_index)
+        if historical is None:
+            raise RuntimeError(
+                f"Missing historical K=10 record for "
+                f"{instance.instance_id} / ordering {ordering.ordering_index}"
+            )
+        if (
+            historical.agent_order != ordering.agent_order
+            or historical.ordering_seed != ordering.ordering_seed
+        ):
+            raise RuntimeError(
+                f"Historical K=10 ordering mismatch for "
+                f"{instance.instance_id} / ordering {ordering.ordering_index}: "
+                f"historical agent_order={historical.agent_order}, "
+                f"reconstructed agent_order={ordering.agent_order}"
+            )
+        excluded_orders.append(ordering.agent_order)
+
+    return tuple(excluded_orders)
+
+
+def generate_supplemental_orderings_for_instance(
+    *,
+    instance: MAPFBenchmarkInstance,
+    base_seed: int,
+    excluded_agent_orders: Sequence[tuple[int, ...]],
+    ordering_index_start: int = SUPPLEMENTAL_ORDERING_INDEX_START,
+    supplemental_count: int = SUPPLEMENTAL_ORDERING_COUNT,
+) -> tuple[RandomPriorityOrderingSpec, ...]:
+    if supplemental_count <= 0:
+        raise ValueError("supplemental_count must be positive")
+
+    max_permutations = math.factorial(instance.agent_count)
+    total_required = len(excluded_agent_orders) + supplemental_count
+    if total_required > max_permutations:
+        raise ValueError(
+            f"cannot generate {supplemental_count} supplemental unique orderings "
+            f"for {instance.agent_count} agents with "
+            f"{len(excluded_agent_orders)} excluded orderings "
+            f"(max {max_permutations})"
+        )
+
+    scenario = _synthetic_scenario_for_ordering(instance.agent_count)
+    seen_orders = set(excluded_agent_orders)
+    if len(seen_orders) != len(excluded_agent_orders):
+        raise RuntimeError(
+            f"excluded_agent_orders for {instance.instance_id} contain duplicates"
+        )
+
+    orderings: list[RandomPriorityOrderingSpec] = []
+    ordering_index_end = ordering_index_start + supplemental_count
+
+    for ordering_index in range(ordering_index_start, ordering_index_end):
+        attempt = 0
+        while True:
+            ordering_seed = derive_ordering_seed(
+                base_seed=base_seed,
+                instance_id=instance.instance_id,
+                ordering_index=ordering_index,
+                attempt=attempt,
+            )
+            ordered = random_priority_order(scenario, ordering_seed)
+            agent_order = tuple(agent.agent_id for agent in ordered.agents)
+            if agent_order not in seen_orders:
+                seen_orders.add(agent_order)
+                orderings.append(
+                    RandomPriorityOrderingSpec(
+                        ordering_index=ordering_index,
+                        ordering_seed=ordering_seed,
+                        agent_order=agent_order,
+                    )
+                )
+                break
+            attempt += 1
+
+    return tuple(orderings)
+
+
+def build_supplemental_random_priority_run_plan(
+    manifest: MAPFBenchmarkManifest,
+    *,
+    base_seed: int,
+    historical_k10_jsonl_path: Path,
+    supplemental_count: int = SUPPLEMENTAL_ORDERING_COUNT,
+    ordering_index_start: int = SUPPLEMENTAL_ORDERING_INDEX_START,
+    agent_counts: Sequence[int] | None = None,
+    interaction_levels: Sequence[str] | None = None,
+    instance_ids: Sequence[str] | None = None,
+    verify_historical_k10: bool = True,
+) -> tuple[RandomPriorityRunPlanEntry, ...]:
+    if supplemental_count <= 0:
+        raise ValueError("supplemental_count must be positive")
+
+    instances = filter_benchmark_instances(
+        manifest.instances,
+        agent_counts=agent_counts,
+        interaction_levels=interaction_levels,
+    )
+
+    if instance_ids is not None:
+        allowed_ids = set(instance_ids)
+        instances = tuple(
+            instance for instance in instances if instance.instance_id in allowed_ids
+        )
+
+    if not instances:
+        raise ValueError("no benchmark instances matched the selection filters")
+
+    historical_by_instance: dict[str, dict[int, RandomPriorityRunRecord]] = {}
+    if verify_historical_k10:
+        if not historical_k10_jsonl_path.is_file():
+            raise FileNotFoundError(
+                f"Historical K=10 checkpoint not found: {historical_k10_jsonl_path}"
+            )
+        historical_by_instance = load_historical_k10_records_by_instance(
+            historical_k10_jsonl_path
+        )
+
+    plan: list[RandomPriorityRunPlanEntry] = []
+    for instance in instances:
+        if verify_historical_k10:
+            historical_records = historical_by_instance.get(instance.instance_id, {})
+            excluded_orders = verify_historical_k10_orderings_match_reconstruction(
+                instance=instance,
+                base_seed=base_seed,
+                historical_records=historical_records,
+            )
+        else:
+            k10_orderings = generate_unique_orderings_for_instance(
+                instance=instance,
+                base_seed=base_seed,
+                k=DEFAULT_RANDOM_PRIORITY_K,
+            )
+            excluded_orders = tuple(ordering.agent_order for ordering in k10_orderings)
+
+        orderings = generate_supplemental_orderings_for_instance(
+            instance=instance,
+            base_seed=base_seed,
+            excluded_agent_orders=excluded_orders,
+            ordering_index_start=ordering_index_start,
+            supplemental_count=supplemental_count,
+        )
+        for ordering in orderings:
+            plan.append(
+                RandomPriorityRunPlanEntry(instance=instance, ordering=ordering)
+            )
+
+    return tuple(plan)
 
 
 def build_random_priority_run_plan(
