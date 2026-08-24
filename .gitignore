@@ -52,7 +52,7 @@ htmlcov/
 # =========================
 .env
 .cursor
-
+working_tree_structure.txt
 # =========================
 # Large datasets / maps
 # =========================
