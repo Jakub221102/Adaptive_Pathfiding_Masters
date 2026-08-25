@@ -248,14 +248,33 @@ def setup_catalogue_logging(log_file: Path, logger_name: str) -> logging.Logger:
     return logger
 
 
+def assert_production_generation_ready(config: MAPFBenchmarkCatalogueConfig) -> None:
+    """Fail fast before expensive work when production output is unsafe."""
+    if config.map_stem == "AR0404SR":
+        raise ValueError(
+            "AR0404SR is not a valid MAPF-8 cross-map target. Use AR0400SR."
+        )
+    if config.allow_production_manifest_write:
+        if not config.map_path.is_file():
+            raise FileNotFoundError(f"Map file not found: {config.map_path}")
+        if not config.scen_path.is_file():
+            raise FileNotFoundError(f"Scenario file not found: {config.scen_path}")
+        assert_safe_manifest_output(
+            config.output_manifest_path.resolve(),
+            allow_production_manifest_write=True,
+        )
+
+
 def log_catalogue_config_summary(
     logger: logging.Logger,
     config: MAPFBenchmarkCatalogueConfig,
 ) -> None:
     logger.info("=" * 72)
-    logger.info("MAPF BENCHMARK CATALOGUE GENERATION CONFIGURATION")
+    logger.info("MAPF-8.2 PRODUCTION CROSS-MAP CATALOGUE GENERATION")
     logger.info("=" * 72)
-    logger.info(f"  map stem: {config.map_stem}")
+    logger.info(f"  target map: {config.map_stem}")
+    if config.map_stem == "AR0400SR":
+        logger.info("  note: AR0400SR is the frozen MAPF-8 open-arena map (NOT AR0404SR)")
     logger.info(f"  map path: {config.map_path.resolve()}")
     logger.info(f"  scenario path: {config.scen_path.resolve()}")
     logger.info(f"  output manifest: {config.output_manifest_path.resolve()}")
@@ -268,6 +287,10 @@ def log_catalogue_config_summary(
     logger.info(f"  instances_per_level: {config.instances_per_level}")
     logger.info(
         "  interaction targets: LOW=0, MEDIUM=1..2, HIGH>=3 independent-path conflicts"
+    )
+    logger.info(
+        f"  expected catalogue size: "
+        f"{len(config.agent_counts) * 3 * config.instances_per_level} instances"
     )
     logger.info(
         f"  allow_production_manifest_write: {config.allow_production_manifest_write}"
@@ -635,6 +658,55 @@ def _run_validation_generation(
     )
 
 
+def log_completion_summary(
+    logger: logging.Logger,
+    config: MAPFBenchmarkCatalogueConfig,
+    manifest: MAPFBenchmarkManifest,
+    *,
+    manifest_written: bool,
+    output_path: Path,
+    attempts_by_agent_count: dict[int, int],
+) -> None:
+    expected_total = (
+        len(config.agent_counts)
+        * len(MAPFInteractionLevel)
+        * config.instances_per_level
+    )
+    by_level = {level.value: 0 for level in MAPFInteractionLevel}
+    by_agent = {agent_count: 0 for agent_count in config.agent_counts}
+    for instance in manifest.instances:
+        by_level[instance.interaction_level.value] += 1
+        by_agent[instance.agent_count] += 1
+
+    logger.info("=" * 72)
+    logger.info("MAPF-8.2 PRODUCTION CATALOGUE COMPLETION SUMMARY")
+    logger.info("=" * 72)
+    logger.info(f"Map: {config.map_stem}")
+    logger.info(f"Seed: {config.seed}")
+    logger.info(f"Generated: {len(manifest.instances)} / {expected_total}")
+    logger.info(
+        f"LOW: {by_level['low']} | MEDIUM: {by_level['medium']} | HIGH: {by_level['high']}"
+    )
+    for agent_count in config.agent_counts:
+        logger.info(
+            f"n={agent_count}: {by_agent[agent_count]} "
+            f"(attempts={attempts_by_agent_count.get(agent_count, 'n/a')})"
+        )
+    if manifest_written:
+        logger.info(f"Manifest written: {output_path}")
+    else:
+        logger.info("Manifest written: (disabled — in-memory only)")
+    logger.info("")
+    logger.info("Selected instances:")
+    for instance in manifest.instances:
+        logger.info(
+            f"  {instance.instance_id}: "
+            f"conflicts={instance.independent_conflict_count}, "
+            f"indices={list(instance.scenario_indices)}"
+        )
+    logger.info("")
+
+
 def run_benchmark_catalogue_generation(
     config: MAPFBenchmarkCatalogueConfig,
     *,
@@ -649,6 +721,7 @@ def run_benchmark_catalogue_generation(
 
     active_logger.info(f"{timer.stamp()} Starting catalogue generation")
     log_catalogue_config_summary(active_logger, config)
+    assert_production_generation_ready(config)
 
     active_logger.info(f"{timer.stamp()} STEP 1 — Load map/scenarios")
     grid_map = load_moving_ai_map(config.map_path)
@@ -766,9 +839,19 @@ def run_benchmark_catalogue_generation(
             generation_error = error
 
     if generation_error is not None or generation_result is None:
-        raise RuntimeError(
-            f"Catalogue generation incomplete: {generation_error}"
+        active_logger.error("")
+        active_logger.error("CATALOGUE GENERATION FAILED")
+        active_logger.error(f"Map: {config.map_stem}")
+        active_logger.error(f"Seed: {config.seed}")
+        active_logger.error(f"Underlying error: {generation_error}")
+        active_logger.error(
+            "No interaction thresholds, seeds, agent counts, or target instance "
+            "counts were changed automatically."
         )
+        raise RuntimeError(
+            f"Catalogue generation incomplete for map={config.map_stem}, "
+            f"seed={config.seed}: {generation_error}"
+        ) from generation_error
 
     manifest = generation_result.manifest
     attempts_by_agent_count = generation_result.attempts_by_agent_count
@@ -858,6 +941,24 @@ def run_benchmark_catalogue_generation(
                 f"{len(counts):9d} | {summary.attempts:15d} | {counts}"
             )
     active_logger.info("")
+    log_completion_summary(
+        active_logger,
+        config,
+        manifest,
+        manifest_written=manifest_written,
+        output_path=output_path,
+        attempts_by_agent_count=attempts_by_agent_count,
+    )
+    if manifest_written:
+        from pathfinding.src.experiments.mapf_cross_map_catalogue_validation import (
+            manifest_file_sha256,
+        )
+
+        active_logger.info(f"SHA-256: {manifest_file_sha256(output_path)}")
+        active_logger.info(
+            "Run mapf_validate_cross_map_catalogue_main.py to validate and freeze."
+        )
+        active_logger.info("")
 
     return MAPFBenchmarkCatalogueGenerationResult(
         manifest=manifest,

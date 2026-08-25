@@ -3,8 +3,11 @@
 Open in PyCharm and press Run. No command-line arguments required.
 Edit the MAPF-8 CROSS-MAP CATALOGUE CONFIGURATION block below.
 
-MAPF-8.1 default: production manifest write is DISABLED.
-Enable ALLOW_PRODUCTION_MANIFEST_WRITE in MAPF-8.2 before freezing manifests.
+MAPF-8.2 manual production workflow:
+  1. Set TARGET_MAP to AR0400SR or AR0307SR (NOT AR0404SR).
+  2. Set ALLOW_PRODUCTION_MANIFEST_WRITE = True.
+  3. Run this script once per map (sequentially).
+  4. Run mapf_validate_cross_map_catalogue_main.py for the same TARGET_MAP.
 """
 
 from __future__ import annotations
@@ -27,12 +30,13 @@ from pathfinding.src.experiments.mapf_benchmark_catalogue_generation import (
 # ============================================================
 
 # Choose exactly one frozen MAPF-8 target:
-#   "AR0400SR"  (seed 2028)
+#   "AR0400SR"  (seed 2028)  — NOT AR0404SR
 #   "AR0307SR"  (seed 2029)
-TARGET_MAP = "AR0400SR"
+TARGET_MAP = "AR0307SR"
 
-# MAPF-8.2: set True before manual production catalogue generation.
-ALLOW_PRODUCTION_MANIFEST_WRITE = False
+# Required True for MAPF-8.2 production generation. Default False prevents
+# accidental manifest creation during infrastructure development.
+ALLOW_PRODUCTION_MANIFEST_WRITE = True
 
 # ============================================================
 # END CONFIGURATION
