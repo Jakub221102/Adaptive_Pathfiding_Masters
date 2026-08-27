@@ -1,0 +1,77 @@
+Validation status: PASSED
+AR0400SR: expected 108 records, found 108
+AR0400SR: no duplicate (map_name, instance_id, strategy)
+AR0400SR: exactly 27 unique instance IDs
+AR0400SR: instance IDs match manifest
+AR0400SR: strategy set exactly SPF/CDF-H/CDF-L/SPF+CD
+AR0400SR strategy spf: expected 27, found 27
+AR0400SR strategy cdf_h: expected 27, found 27
+AR0400SR strategy cdf_l: expected 27, found 27
+AR0400SR strategy spf_cd: expected 27, found 27
+AR0400SR AR0400SR_n05_high_000: exactly four strategy records
+AR0400SR AR0400SR_n05_low_000: exactly four strategy records
+AR0400SR AR0400SR_n20_medium_002: exactly four strategy records
+AR0400SR AR0400SR_n20_high_002: exactly four strategy records
+AR0400SR AR0400SR_n10_medium_000: exactly four strategy records
+AR0400SR AR0400SR_n05_low_002: exactly four strategy records
+AR0400SR AR0400SR_n20_high_001: exactly four strategy records
+AR0400SR AR0400SR_n20_low_000: exactly four strategy records
+AR0400SR AR0400SR_n05_high_001: exactly four strategy records
+AR0400SR AR0400SR_n10_high_000: exactly four strategy records
+AR0400SR AR0400SR_n10_low_001: exactly four strategy records
+AR0400SR AR0400SR_n05_medium_000: exactly four strategy records
+AR0400SR AR0400SR_n05_low_001: exactly four strategy records
+AR0400SR AR0400SR_n10_high_001: exactly four strategy records
+AR0400SR AR0400SR_n10_low_000: exactly four strategy records
+AR0400SR AR0400SR_n20_high_000: exactly four strategy records
+AR0400SR AR0400SR_n20_medium_000: exactly four strategy records
+AR0400SR AR0400SR_n20_medium_001: exactly four strategy records
+AR0400SR AR0400SR_n10_high_002: exactly four strategy records
+AR0400SR AR0400SR_n20_low_001: exactly four strategy records
+AR0400SR AR0400SR_n10_low_002: exactly four strategy records
+AR0400SR AR0400SR_n10_medium_001: exactly four strategy records
+AR0400SR AR0400SR_n05_medium_001: exactly four strategy records
+AR0400SR AR0400SR_n20_low_002: exactly four strategy records
+AR0400SR AR0400SR_n05_medium_002: exactly four strategy records
+AR0400SR AR0400SR_n05_high_002: exactly four strategy records
+AR0400SR AR0400SR_n10_medium_002: exactly four strategy records
+AR0400SR: success=108, failure=0
+AR0307SR: expected 108 records, found 108
+AR0307SR: no duplicate (map_name, instance_id, strategy)
+AR0307SR: exactly 27 unique instance IDs
+AR0307SR: instance IDs match manifest
+AR0307SR: strategy set exactly SPF/CDF-H/CDF-L/SPF+CD
+AR0307SR strategy spf: expected 27, found 27
+AR0307SR strategy cdf_h: expected 27, found 27
+AR0307SR strategy cdf_l: expected 27, found 27
+AR0307SR strategy spf_cd: expected 27, found 27
+AR0307SR AR0307SR_n10_high_001: exactly four strategy records
+AR0307SR AR0307SR_n05_high_001: exactly four strategy records
+AR0307SR AR0307SR_n20_medium_002: exactly four strategy records
+AR0307SR AR0307SR_n20_medium_000: exactly four strategy records
+AR0307SR AR0307SR_n05_high_002: exactly four strategy records
+AR0307SR AR0307SR_n05_low_002: exactly four strategy records
+AR0307SR AR0307SR_n05_high_000: exactly four strategy records
+AR0307SR AR0307SR_n20_low_002: exactly four strategy records
+AR0307SR AR0307SR_n20_medium_001: exactly four strategy records
+AR0307SR AR0307SR_n10_low_000: exactly four strategy records
+AR0307SR AR0307SR_n20_high_001: exactly four strategy records
+AR0307SR AR0307SR_n05_medium_000: exactly four strategy records
+AR0307SR AR0307SR_n20_high_002: exactly four strategy records
+AR0307SR AR0307SR_n10_high_000: exactly four strategy records
+AR0307SR AR0307SR_n10_low_001: exactly four strategy records
+AR0307SR AR0307SR_n05_medium_002: exactly four strategy records
+AR0307SR AR0307SR_n10_medium_000: exactly four strategy records
+AR0307SR AR0307SR_n05_low_001: exactly four strategy records
+AR0307SR AR0307SR_n20_high_000: exactly four strategy records
+AR0307SR AR0307SR_n10_medium_001: exactly four strategy records
+AR0307SR AR0307SR_n05_low_000: exactly four strategy records
+AR0307SR AR0307SR_n20_low_000: exactly four strategy records
+AR0307SR AR0307SR_n10_low_002: exactly four strategy records
+AR0307SR AR0307SR_n10_medium_002: exactly four strategy records
+AR0307SR AR0307SR_n20_low_001: exactly four strategy records
+AR0307SR AR0307SR_n05_medium_001: exactly four strategy records
+AR0307SR AR0307SR_n10_high_002: exactly four strategy records
+AR0307SR: success=108, failure=0
+Combined MAPF-8: expected 216 records, found 216
+Combined MAPF-8: expected 54 unique instances, found 54

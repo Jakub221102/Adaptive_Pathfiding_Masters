@@ -1,0 +1,10 @@
+catalogue,agent_count,instance_count,soc_sensitive_count,makespan_sensitive_count,mean_soc_range,median_soc_range,max_soc_range
+AR0400SR,5,9,1,1,0.1111111111111111,0,1
+AR0400SR,10,9,0,0,0,0,0
+AR0400SR,20,9,1,0,44,0,396
+AR0307SR,5,9,0,0,0,0,0
+AR0307SR,10,9,0,0,0,0,0
+AR0307SR,20,9,2,1,2.5555555555555554,0,22
+pooled_cross_map,5,18,1,1,0.05555555555555555,0.0,1
+pooled_cross_map,10,18,0,0,0,0.0,0
+pooled_cross_map,20,18,3,1,23.27777777777778,0.0,396

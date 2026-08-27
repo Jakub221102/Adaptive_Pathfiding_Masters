@@ -1,0 +1,10 @@
+catalogue,interaction_level,instance_count,soc_sensitive_count,makespan_sensitive_count,mean_soc_range,median_soc_range,max_soc_range
+AR0400SR,low,9,0,0,0,0,0
+AR0400SR,medium,9,0,0,0,0,0
+AR0400SR,high,9,2,1,44.111111111111114,0,396
+AR0307SR,low,9,0,0,0,0,0
+AR0307SR,medium,9,0,0,0,0,0
+AR0307SR,high,9,2,1,2.5555555555555554,0,22
+pooled_cross_map,low,18,0,0,0,0.0,0
+pooled_cross_map,medium,18,0,0,0,0.0,0
+pooled_cross_map,high,18,4,2,23.333333333333332,0.0,396

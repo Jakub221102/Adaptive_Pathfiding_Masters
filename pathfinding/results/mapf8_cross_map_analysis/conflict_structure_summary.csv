@@ -1,0 +1,15 @@
+catalogue,group,instance_count,mean_independent_conflict_count,median_independent_conflict_count,mean_independent_conflict_pair_count,median_independent_conflict_pair_count,mean_max_degree,median_max_degree,mean_soc_range,instance_id,agent_count,interaction_level,independent_conflict_count,independent_conflict_pair_count,max_degree,soc_range
+AR0400SR,soc_sensitive,2,30.0,30.0,4.5,4.5,2.0,2.0,198.5,,,,,,,
+AR0400SR,soc_insensitive,25,11.64,1.0,0.92,1.0,0.72,1.0,0.0,,,,,,,
+AR0400SR,sensitive_instance,,,,,,,,,AR0400SR_n05_high_000,5,high,3,3,2,1
+AR0400SR,sensitive_instance,,,,,,,,,AR0400SR_n20_high_001,20,high,57,6,2,396
+AR0307SR,soc_sensitive,2,8.5,8.5,8.5,8.5,3.0,3.0,11.5,,,,,,,
+AR0307SR,soc_insensitive,25,1.52,1.0,1.52,1.0,1.0,1.0,0.0,,,,,,,
+AR0307SR,sensitive_instance,,,,,,,,,AR0307SR_n20_high_000,20,high,8,8,3,1
+AR0307SR,sensitive_instance,,,,,,,,,AR0307SR_n20_high_002,20,high,9,9,3,22
+pooled_cross_map,soc_sensitive,4,19.25,8.5,6.5,7.0,2.5,2.5,105.0,,,,,,,
+pooled_cross_map,soc_insensitive,50,6.58,1.0,1.22,1.0,0.86,1.0,0.0,,,,,,,
+pooled_cross_map,sensitive_instance,,,,,,,,,AR0400SR_n05_high_000,5,high,3,3,2,1
+pooled_cross_map,sensitive_instance,,,,,,,,,AR0400SR_n20_high_001,20,high,57,6,2,396
+pooled_cross_map,sensitive_instance,,,,,,,,,AR0307SR_n20_high_000,20,high,8,8,3,1
+pooled_cross_map,sensitive_instance,,,,,,,,,AR0307SR_n20_high_002,20,high,9,9,3,22
