@@ -137,6 +137,33 @@ def incident_conflict_counts(
     return tuple(counts)
 
 
+def pair_conflict_event_counts(
+    scenario: MAPFScenario,
+    conflicts: Sequence[Conflict],
+) -> dict[tuple[int, int], int]:
+    """Count independent-path conflict events per canonical original-index pair."""
+    id_to_index = _agent_id_to_original_index(scenario)
+    counts: dict[tuple[int, int], int] = {}
+
+    for conflict in conflicts:
+        if conflict.agent1_id not in id_to_index:
+            raise ValueError(
+                f"unknown agent_id in conflict: {conflict.agent1_id}"
+            )
+        if conflict.agent2_id not in id_to_index:
+            raise ValueError(
+                f"unknown agent_id in conflict: {conflict.agent2_id}"
+            )
+        first_index = id_to_index[conflict.agent1_id]
+        second_index = id_to_index[conflict.agent2_id]
+        if first_index == second_index:
+            raise ValueError("conflict must involve two distinct agents")
+        key = (min(first_index, second_index), max(first_index, second_index))
+        counts[key] = counts.get(key, 0) + 1
+
+    return counts
+
+
 def build_conflict_aware_ordering_inputs(
     grid_map: GridMap,
     scenario: MAPFScenario,
