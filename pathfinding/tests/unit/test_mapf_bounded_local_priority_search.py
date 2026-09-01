@@ -262,7 +262,7 @@ def _shared_with_conflicts(
         preprocessing_timings=__import__(
             "pathfinding.src.experiments.mapf_bounded_local_priority_search",
             fromlist=["MAPF9PreprocessingTimings"],
-        ).MAPF9PreprocessingTimings(0.0, 0.0),
+        ).MAPF9PreprocessingTimings(0.0, 0.0, 0.0),
     )
 
 
@@ -322,7 +322,7 @@ def test_cglps_more_than_budget_exactly_four() -> None:
         agent_id_by_original_index={0: 0, 1: 1, 2: 2, 3: 3},
         conflict_edges=frozenset(edges),
         pair_event_counts=pair_counts,
-        preprocessing_timings=MAPF9PreprocessingTimings(0.0, 0.0),
+        preprocessing_timings=MAPF9PreprocessingTimings(0.0, 0.0, 0.0),
     )
     specs = generate_cglps_candidate_specs(shared)
     assert len(specs) == MAPF9_CGLPS_BUDGET

@@ -8,6 +8,7 @@ conflicts before standard PP. They are not online-adaptive during planning.
 from __future__ import annotations
 
 import random
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
@@ -39,6 +40,14 @@ class ConflictAwareOrderingInputs:
     incident_counts: tuple[int, ...]
     conflicts: tuple[Conflict, ...]
     conflict_pair_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class ConflictAwareOrderingBuildTimings:
+    """Wall-clock split for independent paths vs conflict analysis."""
+
+    independent_path_time_ms: float
+    conflict_detection_time_ms: float
 
 
 def _compute_independent_agent_data(
@@ -164,23 +173,26 @@ def pair_conflict_event_counts(
     return counts
 
 
-def build_conflict_aware_ordering_inputs(
+def build_conflict_aware_ordering_inputs_with_timings(
     grid_map: GridMap,
     scenario: MAPFScenario,
     max_timestep: int,
-) -> ConflictAwareOrderingInputs:
+) -> tuple[ConflictAwareOrderingInputs, ConflictAwareOrderingBuildTimings]:
+    independent_start = time.perf_counter()
     agent_data = _compute_independent_agent_data(
         grid_map=grid_map,
         scenario=scenario,
         max_timestep=max_timestep,
     )
+    independent_path_time_ms = (time.perf_counter() - independent_start) * 1000.0
+
+    conflict_start = time.perf_counter()
     paths = tuple(path for path, _, _, _ in agent_data)
     independent_costs = tuple(cost for _, cost, _, _ in agent_data)
     conflicts = detect_conflicts(paths)
     edges = conflict_graph_edges(scenario, conflicts)
     degrees = conflict_degrees_from_edges(len(scenario.agents), edges)
-
-    return ConflictAwareOrderingInputs(
+    inputs = ConflictAwareOrderingInputs(
         paths=paths,
         independent_costs=independent_costs,
         degrees=degrees,
@@ -188,6 +200,25 @@ def build_conflict_aware_ordering_inputs(
         conflicts=conflicts,
         conflict_pair_count=len(edges),
     )
+    conflict_detection_time_ms = (time.perf_counter() - conflict_start) * 1000.0
+
+    return inputs, ConflictAwareOrderingBuildTimings(
+        independent_path_time_ms=independent_path_time_ms,
+        conflict_detection_time_ms=conflict_detection_time_ms,
+    )
+
+
+def build_conflict_aware_ordering_inputs(
+    grid_map: GridMap,
+    scenario: MAPFScenario,
+    max_timestep: int,
+) -> ConflictAwareOrderingInputs:
+    inputs, _ = build_conflict_aware_ordering_inputs_with_timings(
+        grid_map=grid_map,
+        scenario=scenario,
+        max_timestep=max_timestep,
+    )
+    return inputs
 
 
 def reorder_scenario_from_conflict_aware_inputs(

@@ -18,7 +18,7 @@ from pathfinding.src.algorithms.mapf.metrics import makespan, sum_of_costs
 from pathfinding.src.algorithms.mapf.models import MAPFResult, MAPFScenario
 from pathfinding.src.algorithms.mapf.priority_ordering import (
     ConflictAwareOrderingInputs,
-    build_conflict_aware_ordering_inputs,
+    build_conflict_aware_ordering_inputs_with_timings,
     conflict_graph_edges,
     pair_conflict_event_counts,
 )
@@ -49,6 +49,7 @@ class MAPF9Method(str, Enum):
 @dataclass(frozen=True, slots=True)
 class MAPF9PreprocessingTimings:
     independent_path_time_ms: float
+    conflict_detection_time_ms: float
     spf_ordering_time_ms: float
 
 
@@ -104,10 +105,15 @@ class MAPF9CandidateEvaluation:
 @dataclass(frozen=True, slots=True)
 class MAPF9MethodTimings:
     baseline_spf_pp_time_ms: float
-    conflict_detection_and_ranking_time_ms: float = 0.0
+    cglps_candidate_ranking_time_ms: float = 0.0
     cglps_additional_pp_time_ms: float = 0.0
     ubls_candidate_generation_time_ms: float = 0.0
     ubls_additional_pp_time_ms: float = 0.0
+
+    @property
+    def conflict_detection_and_ranking_time_ms(self) -> float:
+        """CGLPS candidate ranking only; conflict detection is in preprocessing."""
+        return self.cglps_candidate_ranking_time_ms
 
 
 @dataclass(frozen=True, slots=True)
@@ -203,7 +209,7 @@ def prepare_mapf9_instance(
 
     independent_start = time.perf_counter()
     try:
-        inputs = build_conflict_aware_ordering_inputs(
+        inputs, build_timings = build_conflict_aware_ordering_inputs_with_timings(
             grid_map=grid_map,
             scenario=scenario,
             max_timestep=max_timestep,
@@ -215,19 +221,21 @@ def prepare_mapf9_instance(
             error_message=str(error),
             preprocessing_timings=MAPF9PreprocessingTimings(
                 independent_path_time_ms=independent_time_ms,
+                conflict_detection_time_ms=0.0,
                 spf_ordering_time_ms=0.0,
             ),
         )
-    independent_time_ms = (time.perf_counter() - independent_start) * 1000.0
 
-    spf_start = time.perf_counter()
-    spf_order = spf_agent_order_from_inputs(scenario, inputs)
-    spf_ordering_time_ms = (time.perf_counter() - spf_start) * 1000.0
-
+    pair_ranking_start = time.perf_counter()
     id_to_index = original_index_by_agent_id(scenario)
     index_to_id = agent_id_by_original_index(scenario)
     pair_counts = pair_conflict_event_counts(scenario, inputs.conflicts)
     edges = conflict_graph_edges(scenario, inputs.conflicts)
+    pair_ranking_time_ms = (time.perf_counter() - pair_ranking_start) * 1000.0
+
+    spf_start = time.perf_counter()
+    spf_order = spf_agent_order_from_inputs(scenario, inputs)
+    spf_ordering_time_ms = (time.perf_counter() - spf_start) * 1000.0
 
     return MAPF9SharedInstance(
         grid_map=grid_map,
@@ -240,7 +248,10 @@ def prepare_mapf9_instance(
         conflict_edges=edges,
         pair_event_counts=pair_counts,
         preprocessing_timings=MAPF9PreprocessingTimings(
-            independent_path_time_ms=independent_time_ms,
+            independent_path_time_ms=build_timings.independent_path_time_ms,
+            conflict_detection_time_ms=(
+                build_timings.conflict_detection_time_ms + pair_ranking_time_ms
+            ),
             spf_ordering_time_ms=spf_ordering_time_ms,
         ),
     )
@@ -510,8 +521,8 @@ def _method_result_from_evaluations(
     if method == MAPF9Method.CGLPS:
         method_timings = MAPF9MethodTimings(
             baseline_spf_pp_time_ms=method_timings.baseline_spf_pp_time_ms,
-            conflict_detection_and_ranking_time_ms=(
-                method_timings.conflict_detection_and_ranking_time_ms
+            cglps_candidate_ranking_time_ms=(
+                method_timings.cglps_candidate_ranking_time_ms
             ),
             cglps_additional_pp_time_ms=additional_pp_time,
             ubls_candidate_generation_time_ms=(
@@ -522,8 +533,8 @@ def _method_result_from_evaluations(
     elif method == MAPF9Method.UBLS:
         method_timings = MAPF9MethodTimings(
             baseline_spf_pp_time_ms=method_timings.baseline_spf_pp_time_ms,
-            conflict_detection_and_ranking_time_ms=(
-                method_timings.conflict_detection_and_ranking_time_ms
+            cglps_candidate_ranking_time_ms=(
+                method_timings.cglps_candidate_ranking_time_ms
             ),
             cglps_additional_pp_time_ms=method_timings.cglps_additional_pp_time_ms,
             ubls_candidate_generation_time_ms=(
@@ -634,7 +645,7 @@ def evaluate_cglps(
         additional_evaluations=tuple(additional_evaluations),
         method_timings=MAPF9MethodTimings(
             baseline_spf_pp_time_ms=baseline.pp_time_ms,
-            conflict_detection_and_ranking_time_ms=ranking_time_ms,
+            cglps_candidate_ranking_time_ms=ranking_time_ms,
         ),
     )
 
@@ -786,4 +797,113 @@ def ordering_failure_method_result(
         preprocessing_timings=failure.preprocessing_timings,
         method_timings=None,
         error_message=failure.error_message,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class MAPF9IntegrationResult:
+    instance_id: str
+    shared: MAPF9SharedInstance | None
+    ordering_failure: MAPF9OrderingFailure | None
+    spf: MAPF9MethodResult
+    cglps: MAPF9MethodResult
+    ubls: MAPF9MethodResult
+    actual_a_i: int
+    physical_pp_eval_count: int
+
+
+def mapf9_spf_logical_total_ms(
+    preprocessing: MAPF9PreprocessingTimings,
+    method_timings: MAPF9MethodTimings,
+) -> float:
+    return (
+        preprocessing.independent_path_time_ms
+        + preprocessing.spf_ordering_time_ms
+        + method_timings.baseline_spf_pp_time_ms
+    )
+
+
+def mapf9_cglps_logical_total_ms(
+    preprocessing: MAPF9PreprocessingTimings,
+    method_timings: MAPF9MethodTimings,
+) -> float:
+    return (
+        mapf9_spf_logical_total_ms(preprocessing, method_timings)
+        + preprocessing.conflict_detection_time_ms
+        + method_timings.cglps_candidate_ranking_time_ms
+        + method_timings.cglps_additional_pp_time_ms
+    )
+
+
+def mapf9_ubls_logical_total_ms(
+    preprocessing: MAPF9PreprocessingTimings,
+    method_timings: MAPF9MethodTimings,
+) -> float:
+    return (
+        mapf9_spf_logical_total_ms(preprocessing, method_timings)
+        + method_timings.ubls_candidate_generation_time_ms
+        + method_timings.ubls_additional_pp_time_ms
+    )
+
+
+def evaluate_mapf9_instance(
+    *,
+    grid_map: GridMap,
+    scenario: MAPFScenario,
+    max_timestep: int,
+    instance_id: str,
+    budget: int = MAPF9_CGLPS_BUDGET,
+    pp_runner: Callable[..., PrioritizedPlanningRunResult] | None = None,
+) -> MAPF9IntegrationResult:
+    shared = prepare_mapf9_instance(
+        grid_map=grid_map,
+        scenario=scenario,
+        max_timestep=max_timestep,
+    )
+
+    if isinstance(shared, MAPF9OrderingFailure):
+        return MAPF9IntegrationResult(
+            instance_id=instance_id,
+            shared=None,
+            ordering_failure=shared,
+            spf=ordering_failure_method_result(shared, method=MAPF9Method.SPF),
+            cglps=ordering_failure_method_result(shared, method=MAPF9Method.CGLPS),
+            ubls=ordering_failure_method_result(shared, method=MAPF9Method.UBLS),
+            actual_a_i=0,
+            physical_pp_eval_count=0,
+        )
+
+    baseline = evaluate_spf_baseline(shared, pp_runner=pp_runner)
+    spf = evaluate_spf_method_result(shared, baseline)
+    cglps = evaluate_cglps(
+        shared,
+        baseline,
+        budget=budget,
+        pp_runner=pp_runner,
+    )
+    ubls = evaluate_ubls(
+        shared,
+        baseline,
+        instance_id=instance_id,
+        additional_count=cglps.additional_pp_eval_count,
+        pp_runner=pp_runner,
+    )
+
+    actual_a_i = cglps.additional_pp_eval_count
+    if actual_a_i != ubls.additional_pp_eval_count:
+        raise RuntimeError(
+            "matched A_i invariant violated: "
+            f"cglps={cglps.additional_pp_eval_count}, "
+            f"ubls={ubls.additional_pp_eval_count}"
+        )
+
+    return MAPF9IntegrationResult(
+        instance_id=instance_id,
+        shared=shared,
+        ordering_failure=None,
+        spf=spf,
+        cglps=cglps,
+        ubls=ubls,
+        actual_a_i=actual_a_i,
+        physical_pp_eval_count=1 + actual_a_i + actual_a_i,
     )
