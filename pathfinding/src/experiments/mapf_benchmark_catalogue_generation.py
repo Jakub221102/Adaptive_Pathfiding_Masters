@@ -24,6 +24,9 @@ from pathfinding.src.experiments.mapf_benchmark_instances import (
     INTERACTION_LOW_MAX_CONFLICTS,
     INTERACTION_MEDIUM_MAX_CONFLICTS,
     INTERACTION_MEDIUM_MIN_CONFLICTS,
+    MAPF8_CROSS_MAP_REFERENCE_SEEDS,
+    MAPF9_CATALOGUE_SEEDS,
+    MAPF9_CROSS_MAP_TARGETS,
     MAPFBenchmarkInstance,
     MAPFBenchmarkManifest,
     MAPFBenchmarkManifestGenerationResult,
@@ -34,8 +37,10 @@ from pathfinding.src.experiments.mapf_benchmark_instances import (
     evaluate_benchmark_candidate,
     generate_benchmark_instances_from_precomputed,
     generate_benchmark_manifest,
+    generate_mapf9_benchmark_manifest,
     load_benchmark_manifest,
     save_benchmark_manifest,
+    validate_mapf8_mapf9_signature_disjointness,
 )
 from pathfinding.src.loaders.map_loader import load_moving_ai_map
 from pathfinding.src.loaders.scen_loader import load_moving_ai_scenarios
@@ -55,6 +60,8 @@ PROTECTED_PRODUCTION_MANIFEST_NAMES: frozenset[str] = frozenset(
         "AR0307SR_manifest.json",
     }
 )
+
+MAPF9_MANIFEST_SUFFIX = "_mapf9_manifest.json"
 
 DEFAULT_MAX_TIMESTEP = 512
 DEFAULT_MIN_REFERENCE_LENGTH = 20.0
@@ -89,6 +96,8 @@ class MAPFBenchmarkCatalogueConfig:
     skip_validation: bool = False
     allow_production_manifest_write: bool = False
     expected_source_pool_counts: dict[str, int] | None = None
+    mapf8_reference_manifest_path: Path | None = None
+    catalogue_mode: str = "mapf8"
 
 
 @dataclass
@@ -178,6 +187,76 @@ def resolve_mapf8_cross_map_target(target_map: str) -> str:
     return normalized
 
 
+def resolve_mapf9_cross_map_target(target_map: str) -> str:
+    normalized = target_map.strip()
+    if normalized == "AR0404SR":
+        raise ValueError(
+            "AR0404SR is not a valid MAPF-9 cross-map target. Use AR0400SR."
+        )
+    if normalized not in MAPF9_CROSS_MAP_TARGETS:
+        raise ValueError(
+            f"Unsupported MAPF-9 cross-map target: {target_map!r}. "
+            f"Expected one of: {sorted(MAPF9_CROSS_MAP_TARGETS)}"
+        )
+    return normalized
+
+
+def mapf9_manifest_path(benchmarks_dir: Path, map_stem: str) -> Path:
+    return benchmarks_dir / f"{map_stem}_mapf9_manifest.json"
+
+
+def mapf9_cross_map_catalogue_config(
+    target_map: str,
+    repo_root: Path,
+    *,
+    allow_production_manifest_write: bool = False,
+) -> MAPFBenchmarkCatalogueConfig:
+    """Build frozen MAPF-9 cross-map catalogue configuration for one target map."""
+    map_stem = resolve_mapf9_cross_map_target(target_map)
+    seed = MAPF9_CATALOGUE_SEEDS[map_stem]
+    benchmarks_dir = repo_root / "pathfinding" / "results" / "mapf_benchmarks"
+    mapf8_manifest_path = benchmarks_dir / f"{map_stem}_manifest.json"
+    return MAPFBenchmarkCatalogueConfig(
+        map_stem=map_stem,
+        map_path=repo_root / "Data" / "bg512-map" / f"{map_stem}.map",
+        scen_path=repo_root / "Data" / "bg512-scen" / f"{map_stem}.map.scen",
+        output_manifest_path=benchmarks_dir / f"{map_stem}_mapf9_manifest.json",
+        log_file_path=repo_root / "pathfinding" / "results" / f"mapf9_catalogue_{map_stem}.log",
+        seed=seed,
+        allow_production_manifest_write=allow_production_manifest_write,
+        mapf8_reference_manifest_path=mapf8_manifest_path,
+        catalogue_mode="mapf9",
+    )
+
+
+def assert_mapf9_manifest_output(
+    output_manifest_path: Path,
+    *,
+    allow_production_manifest_write: bool,
+) -> None:
+    manifest_name = output_manifest_path.name
+    if manifest_name in PROTECTED_PRODUCTION_MANIFEST_NAMES:
+        raise RuntimeError(
+            f"Refusing to write MAPF-9 catalogue to protected MAPF-8 manifest path "
+            f"{output_manifest_path}."
+        )
+    if not manifest_name.endswith("_mapf9_manifest.json"):
+        raise RuntimeError(
+            f"MAPF-9 manifest filename must end with '_mapf9_manifest.json': "
+            f"{output_manifest_path}"
+        )
+    if not allow_production_manifest_write:
+        raise RuntimeError(
+            f"Refusing to write MAPF-9 manifest {output_manifest_path} without "
+            "allow_production_manifest_write=True."
+        )
+    if output_manifest_path.exists():
+        raise RuntimeError(
+            f"Refusing to overwrite existing MAPF-9 manifest {output_manifest_path} "
+            "without explicit confirmation. Delete or rename the existing file first."
+        )
+
+
 def mapf8_cross_map_catalogue_config(
     target_map: str,
     repo_root: Path,
@@ -259,27 +338,56 @@ def assert_production_generation_ready(config: MAPFBenchmarkCatalogueConfig) -> 
             raise FileNotFoundError(f"Map file not found: {config.map_path}")
         if not config.scen_path.is_file():
             raise FileNotFoundError(f"Scenario file not found: {config.scen_path}")
-        assert_safe_manifest_output(
-            config.output_manifest_path.resolve(),
-            allow_production_manifest_write=True,
-        )
+        if config.catalogue_mode == "mapf9":
+            if config.mapf8_reference_manifest_path is None:
+                raise ValueError(
+                    "MAPF-9 catalogue generation requires mapf8_reference_manifest_path"
+                )
+            if not config.mapf8_reference_manifest_path.is_file():
+                raise FileNotFoundError(
+                    "Frozen MAPF-8 reference manifest not found: "
+                    f"{config.mapf8_reference_manifest_path}"
+                )
+            assert_mapf9_manifest_output(
+                config.output_manifest_path.resolve(),
+                allow_production_manifest_write=True,
+            )
+        else:
+            assert_safe_manifest_output(
+                config.output_manifest_path.resolve(),
+                allow_production_manifest_write=True,
+            )
 
 
 def log_catalogue_config_summary(
     logger: logging.Logger,
     config: MAPFBenchmarkCatalogueConfig,
 ) -> None:
+    title = (
+        "MAPF-9.3 FRESH CROSS-MAP CATALOGUE GENERATION"
+        if config.catalogue_mode == "mapf9"
+        else "MAPF-8.2 PRODUCTION CROSS-MAP CATALOGUE GENERATION"
+    )
     logger.info("=" * 72)
-    logger.info("MAPF-8.2 PRODUCTION CROSS-MAP CATALOGUE GENERATION")
+    logger.info(title)
     logger.info("=" * 72)
     logger.info(f"  target map: {config.map_stem}")
     if config.map_stem == "AR0400SR":
-        logger.info("  note: AR0400SR is the frozen MAPF-8 open-arena map (NOT AR0404SR)")
+        logger.info("  note: AR0400SR is the frozen open-arena map (NOT AR0404SR)")
     logger.info(f"  map path: {config.map_path.resolve()}")
     logger.info(f"  scenario path: {config.scen_path.resolve()}")
     logger.info(f"  output manifest: {config.output_manifest_path.resolve()}")
     logger.info(f"  log file: {config.log_file_path.resolve()}")
     logger.info(f"  seed: {config.seed}")
+    if config.catalogue_mode == "mapf9":
+        logger.info(
+            f"  MAPF-8 reference manifest: "
+            f"{config.mapf8_reference_manifest_path.resolve() if config.mapf8_reference_manifest_path else 'missing'}"
+        )
+        logger.info(
+            "  MAPF-9 disjointness: reject any candidate whose full scenario-set "
+            "signature appears in the frozen MAPF-8 catalogue on the same map"
+        )
     logger.info(f"  max_timestep: {config.max_timestep}")
     logger.info(f"  min_reference_length: {config.min_reference_length}")
     logger.info(f"  max_attempts: {config.max_attempts}")
@@ -817,20 +925,54 @@ def run_benchmark_catalogue_generation(
 
     with lookup_only_guards():
         try:
-            generation_result = generate_benchmark_manifest(
-                grid_map=grid_map,
-                scenarios=scenarios,
-                scenario_name=config.scen_path.name,
-                agent_counts=config.agent_counts,
-                instances_per_level=config.instances_per_level,
-                max_timestep=config.max_timestep,
-                seed=config.seed,
-                min_reference_length=config.min_reference_length,
-                max_attempts=config.max_attempts,
-                source_pool=source_pool,
-                accepted_instance_callback=accepted_callback,
-                generation_start_callback=generation_start_tracked,
-            )
+            if config.catalogue_mode == "mapf9":
+                if config.mapf8_reference_manifest_path is None:
+                    raise ValueError(
+                        "mapf8_reference_manifest_path is required for MAPF-9 generation"
+                    )
+                mapf8_reference = load_benchmark_manifest(
+                    config.mapf8_reference_manifest_path
+                )
+                expected_mapf8_seed = MAPF8_CROSS_MAP_REFERENCE_SEEDS[config.map_stem]
+                if mapf8_reference.seed != expected_mapf8_seed:
+                    raise ValueError(
+                        f"Expected frozen MAPF-8 seed {expected_mapf8_seed} in "
+                        f"{config.mapf8_reference_manifest_path}, "
+                        f"found {mapf8_reference.seed}"
+                    )
+                generation_result = generate_mapf9_benchmark_manifest(
+                    grid_map=grid_map,
+                    scenarios=scenarios,
+                    scenario_name=config.scen_path.name,
+                    mapf8_reference_manifest=mapf8_reference,
+                    agent_counts=config.agent_counts,
+                    instances_per_level=config.instances_per_level,
+                    max_timestep=config.max_timestep,
+                    seed=config.seed,
+                    min_reference_length=config.min_reference_length,
+                    max_attempts=config.max_attempts,
+                    source_pool=source_pool,
+                    mapf8_manifest_reference=str(
+                        config.mapf8_reference_manifest_path.resolve()
+                    ),
+                    accepted_instance_callback=accepted_callback,
+                    generation_start_callback=generation_start_tracked,
+                )
+            else:
+                generation_result = generate_benchmark_manifest(
+                    grid_map=grid_map,
+                    scenarios=scenarios,
+                    scenario_name=config.scen_path.name,
+                    agent_counts=config.agent_counts,
+                    instances_per_level=config.instances_per_level,
+                    max_timestep=config.max_timestep,
+                    seed=config.seed,
+                    min_reference_length=config.min_reference_length,
+                    max_attempts=config.max_attempts,
+                    source_pool=source_pool,
+                    accepted_instance_callback=accepted_callback,
+                    generation_start_callback=generation_start_tracked,
+                )
             for agent_count in config.agent_counts:
                 sampling_elapsed_by_agent_count[agent_count] = (
                     time.perf_counter() - sampling_starts[agent_count]
@@ -876,23 +1018,52 @@ def run_benchmark_catalogue_generation(
         instances_per_level=config.instances_per_level,
         expected_map_stem=config.map_stem,
     )
+    if config.catalogue_mode == "mapf9":
+        if config.mapf8_reference_manifest_path is None:
+            raise RuntimeError("mapf8_reference_manifest_path is required for MAPF-9")
+        mapf8_reference = load_benchmark_manifest(config.mapf8_reference_manifest_path)
+        validate_mapf8_mapf9_signature_disjointness(manifest, mapf8_reference)
+        active_logger.info(
+            "MAPF-9 vs MAPF-8 scenario-set signature disjointness check passed."
+        )
     active_logger.info("Manifest content validation passed.")
     active_logger.info("")
 
     active_logger.info(f"{timer.stamp()} STEP — Determinism check")
     with lookup_only_guards():
-        repeat_result = generate_benchmark_manifest(
-            grid_map=grid_map,
-            scenarios=scenarios,
-            scenario_name=config.scen_path.name,
-            agent_counts=config.agent_counts,
-            instances_per_level=config.instances_per_level,
-            max_timestep=config.max_timestep,
-            seed=config.seed,
-            min_reference_length=config.min_reference_length,
-            max_attempts=config.max_attempts,
-            source_pool=source_pool,
-        )
+        if config.catalogue_mode == "mapf9":
+            mapf8_reference = load_benchmark_manifest(
+                config.mapf8_reference_manifest_path  # type: ignore[arg-type]
+            )
+            repeat_result = generate_mapf9_benchmark_manifest(
+                grid_map=grid_map,
+                scenarios=scenarios,
+                scenario_name=config.scen_path.name,
+                mapf8_reference_manifest=mapf8_reference,
+                agent_counts=config.agent_counts,
+                instances_per_level=config.instances_per_level,
+                max_timestep=config.max_timestep,
+                seed=config.seed,
+                min_reference_length=config.min_reference_length,
+                max_attempts=config.max_attempts,
+                source_pool=source_pool,
+                mapf8_manifest_reference=str(
+                    config.mapf8_reference_manifest_path.resolve()  # type: ignore[union-attr]
+                ),
+            )
+        else:
+            repeat_result = generate_benchmark_manifest(
+                grid_map=grid_map,
+                scenarios=scenarios,
+                scenario_name=config.scen_path.name,
+                agent_counts=config.agent_counts,
+                instances_per_level=config.instances_per_level,
+                max_timestep=config.max_timestep,
+                seed=config.seed,
+                min_reference_length=config.min_reference_length,
+                max_attempts=config.max_attempts,
+                source_pool=source_pool,
+            )
     if repeat_result.manifest.instances != manifest.instances:
         raise RuntimeError("Deterministic regeneration mismatch")
     active_logger.info("Determinism check passed.")
@@ -902,10 +1073,16 @@ def run_benchmark_catalogue_generation(
     output_path = config.output_manifest_path.resolve()
 
     if config.allow_production_manifest_write:
-        assert_safe_manifest_output(
-            output_path,
-            allow_production_manifest_write=True,
-        )
+        if config.catalogue_mode == "mapf9":
+            assert_mapf9_manifest_output(
+                output_path,
+                allow_production_manifest_write=True,
+            )
+        else:
+            assert_safe_manifest_output(
+                output_path,
+                allow_production_manifest_write=True,
+            )
         active_logger.info(f"{timer.stamp()} STEP — Save manifest")
         tmp_path = output_path.with_suffix(output_path.suffix + ".tmp")
         save_benchmark_manifest(manifest, tmp_path)

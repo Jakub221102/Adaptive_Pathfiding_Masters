@@ -39,8 +39,19 @@ INTERACTION_HIGH_MIN_CONFLICTS = 3
 
 CATALOGUE_ROLE_PRIMARY = "primary"
 CATALOGUE_ROLE_HELD_OUT = "held_out_validation"
+CATALOGUE_ROLE_MAPF9 = "mapf9_primary"
 HELD_OUT_CATALOGUE_GENERATION_VERSION = "MAPF-7.6"
+MAPF9_CATALOGUE_GENERATION_VERSION = "MAPF-9.3"
 DEFAULT_HELD_OUT_SEED = 2027
+MAPF9_CATALOGUE_SEEDS: dict[str, int] = {
+    "AR0400SR": 2030,
+    "AR0307SR": 2031,
+}
+MAPF9_CROSS_MAP_TARGETS: frozenset[str] = frozenset({"AR0400SR", "AR0307SR"})
+MAPF8_CROSS_MAP_REFERENCE_SEEDS: dict[str, int] = {
+    "AR0400SR": 2028,
+    "AR0307SR": 2029,
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -348,6 +359,47 @@ def collect_scenario_set_signatures_by_agent_count(
             benchmark_scenario_set_signature(instance.scenario_indices)
         )
     return signatures_by_agent_count
+
+
+def collect_all_scenario_set_signatures(
+    instances: Sequence[MAPFBenchmarkInstance],
+) -> frozenset[tuple[int, ...]]:
+    return frozenset(
+        benchmark_scenario_set_signature(instance.scenario_indices)
+        for instance in instances
+    )
+
+
+def mapf8_mapf9_signature_overlap(
+    mapf9_manifest: MAPFBenchmarkManifest,
+    mapf8_manifest: MAPFBenchmarkManifest,
+) -> tuple[frozenset[tuple[int, ...]], frozenset[tuple[int, ...]], frozenset[tuple[int, ...]]]:
+    """Return (mapf9_signatures, mapf8_signatures, intersection)."""
+    mapf9_signatures = collect_all_scenario_set_signatures(mapf9_manifest.instances)
+    mapf8_signatures = collect_all_scenario_set_signatures(mapf8_manifest.instances)
+    intersection = mapf9_signatures & mapf8_signatures
+    return mapf9_signatures, mapf8_signatures, intersection
+
+
+def validate_mapf8_mapf9_signature_disjointness(
+    mapf9_manifest: MAPFBenchmarkManifest,
+    mapf8_manifest: MAPFBenchmarkManifest,
+) -> None:
+    mapf9_signatures, mapf8_signatures, intersection = mapf8_mapf9_signature_overlap(
+        mapf9_manifest,
+        mapf8_manifest,
+    )
+    if intersection:
+        sample = next(iter(intersection))
+        raise ValueError(
+            f"MAPF-9 catalogue shares {len(intersection)} scenario-set signature(s) "
+            f"with frozen MAPF-8 catalogue on the same map; "
+            f"example overlapping signature: {sample}"
+        )
+    if len(mapf9_signatures) != len(mapf9_manifest.instances):
+        raise ValueError("MAPF-9 manifest contains duplicate scenario-set signatures")
+    if len(mapf8_signatures) != len(mapf8_manifest.instances):
+        raise ValueError("MAPF-8 reference manifest contains duplicate scenario-set signatures")
 
 
 def instance_agent_position_signature(
@@ -1052,6 +1104,10 @@ def generate_benchmark_manifest(
     | None = None,
     accepted_instance_callback: Callable[[MAPFBenchmarkInstance, int], None] | None = None,
     generation_start_callback: Callable[[int], None] | None = None,
+    excluded_signatures_by_agent_count: dict[int, frozenset[tuple[int, ...]]] | None = None,
+    catalogue_role: str = CATALOGUE_ROLE_PRIMARY,
+    generation_version: str | None = None,
+    primary_manifest_reference: str | None = None,
 ) -> MAPFBenchmarkManifestGenerationResult:
     if not agent_counts:
         raise ValueError("agent_counts must not be empty")
@@ -1093,6 +1149,10 @@ def generate_benchmark_manifest(
                     found,
                 )
 
+        excluded = None
+        if excluded_signatures_by_agent_count is not None:
+            excluded = excluded_signatures_by_agent_count.get(agent_count, frozenset())
+
         result = generate_benchmark_instances_from_precomputed(
             grid_map=grid_map,
             scenarios=scenarios,
@@ -1107,6 +1167,7 @@ def generate_benchmark_manifest(
             if sampling_progress_every > 0
             else None,
             accepted_instance_callback=accepted_instance_callback,
+            excluded_signatures=excluded,
         )
         all_instances.extend(result.instances)
         attempts_by_agent_count[agent_count] = result.attempts
@@ -1118,11 +1179,77 @@ def generate_benchmark_manifest(
         max_timestep=max_timestep,
         min_reference_length=min_reference_length,
         instances=tuple(all_instances),
+        catalogue_role=catalogue_role,
+        generation_version=generation_version,
+        primary_manifest_reference=primary_manifest_reference,
     )
     return MAPFBenchmarkManifestGenerationResult(
         manifest=manifest,
         attempts_by_agent_count=attempts_by_agent_count,
         source_pool=source_pool,
+    )
+
+
+def generate_mapf9_benchmark_manifest(
+    grid_map: GridMap,
+    scenarios: Sequence[Scenario],
+    scenario_name: str,
+    mapf8_reference_manifest: MAPFBenchmarkManifest,
+    *,
+    agent_counts: Sequence[int] = (5, 10, 20),
+    instances_per_level: int = 3,
+    max_timestep: int = 512,
+    seed: int,
+    min_reference_length: float = 20.0,
+    max_attempts: int = 5000,
+    source_pool: MAPFBenchmarkSourcePool | None = None,
+    mapf8_manifest_reference: str | None = None,
+    precompute_progress_every: int = 0,
+    precompute_progress_callback: Callable[[StaticPrecomputeProgress], None] | None = None,
+    sampling_progress_every: int = 0,
+    sampling_progress_callback: Callable[
+        [int, int, int, dict[MAPFInteractionLevel, int], dict[MAPFInteractionLevel, int]],
+        None,
+    ]
+    | None = None,
+    accepted_instance_callback: Callable[[MAPFBenchmarkInstance, int], None] | None = None,
+    generation_start_callback: Callable[[int], None] | None = None,
+) -> MAPFBenchmarkManifestGenerationResult:
+    """Generate a MAPF-9 primary catalogue excluding MAPF-8 scenario-set signatures."""
+    if seed == mapf8_reference_manifest.seed:
+        raise ValueError(
+            "MAPF-9 seed must differ from the frozen MAPF-8 catalogue seed "
+            f"({mapf8_reference_manifest.seed})."
+        )
+
+    excluded_by_agent_count = {
+        agent_count: frozenset(signatures)
+        for agent_count, signatures in collect_scenario_set_signatures_by_agent_count(
+            mapf8_reference_manifest.instances
+        ).items()
+    }
+
+    return generate_benchmark_manifest(
+        grid_map=grid_map,
+        scenarios=scenarios,
+        scenario_name=scenario_name,
+        agent_counts=agent_counts,
+        instances_per_level=instances_per_level,
+        max_timestep=max_timestep,
+        seed=seed,
+        min_reference_length=min_reference_length,
+        max_attempts=max_attempts,
+        source_pool=source_pool,
+        precompute_progress_every=precompute_progress_every,
+        precompute_progress_callback=precompute_progress_callback,
+        sampling_progress_every=sampling_progress_every,
+        sampling_progress_callback=sampling_progress_callback,
+        accepted_instance_callback=accepted_instance_callback,
+        generation_start_callback=generation_start_callback,
+        excluded_signatures_by_agent_count=excluded_by_agent_count,
+        catalogue_role=CATALOGUE_ROLE_MAPF9,
+        generation_version=MAPF9_CATALOGUE_GENERATION_VERSION,
+        primary_manifest_reference=mapf8_manifest_reference,
     )
 
 
