@@ -1,0 +1,7 @@
+manifest_sha256,map_name,instance_id,method,selected_candidate_id,spf_soc,method_soc,soc_improvement_vs_spf,spf_makespan,method_makespan,makespan_only,lex_vs_spf,actual_a_i,manifest_conflicting_agent_pair_count,manifest_independent_conflict_count
+a8bec75ead3a9f18a6d4e99fa05aa5a2f4291ee289b47debf5533ec06dc18403,AR0307SR,AR0307SR_n05_high_000,cglps,1,1037,1037,0,357,356,True,left_better,1,1,241
+a8bec75ead3a9f18a6d4e99fa05aa5a2f4291ee289b47debf5533ec06dc18403,AR0307SR,AR0307SR_n05_high_002,cglps,1,1832,1832,0,499,498,True,left_better,1,1,367
+a8bec75ead3a9f18a6d4e99fa05aa5a2f4291ee289b47debf5533ec06dc18403,AR0307SR,AR0307SR_n20_high_000,cglps,1,4417,4415,2,510,510,False,left_better,4,7,7
+a8bec75ead3a9f18a6d4e99fa05aa5a2f4291ee289b47debf5533ec06dc18403,AR0307SR,AR0307SR_n20_medium_002,cglps,2,4518,4518,0,433,431,True,left_better,2,2,2
+14964ee449b826c6280299f68a6cfc0cc42d34f3045d87070971027009dbb71c,AR0400SR,AR0400SR_n05_high_000,cglps,1,1295,1294,1,478,478,False,left_better,1,1,78
+14964ee449b826c6280299f68a6cfc0cc42d34f3045d87070971027009dbb71c,AR0400SR,AR0400SR_n05_high_000,ubls,1,1295,1294,1,478,478,False,left_better,1,1,78

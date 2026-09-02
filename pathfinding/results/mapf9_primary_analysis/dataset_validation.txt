@@ -1,0 +1,14 @@
+OK: AR0400SR: manifest SHA verified
+OK: AR0400SR: 27 instance rows
+OK: AR0400SR: 81 method rows
+OK: AR0400SR: 27 candidate audit objects
+OK: AR0400SR: sum A_i=33, physical PP=93
+OK: AR0307SR: manifest SHA verified
+OK: AR0307SR: 27 instance rows
+OK: AR0307SR: 81 method rows
+OK: AR0307SR: 27 candidate audit objects
+OK: AR0307SR: sum A_i=42, physical PP=111
+OK: Pooled instances=54
+OK: Pooled sum A_i=75, physical PP=204
+
+ALL VALIDATIONS PASSED

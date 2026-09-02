@@ -1,0 +1,13 @@
+scope,comparison,left_better_count,equal_count,right_better_count
+AR0400SR,CGLPS_vs_SPF,1,26,0
+AR0400SR,UBLS_vs_SPF,1,26,0
+AR0400SR,CGLPS_vs_UBLS,0,27,0
+AR0307SR,CGLPS_vs_SPF,4,23,0
+AR0307SR,UBLS_vs_SPF,0,27,0
+AR0307SR,CGLPS_vs_UBLS,4,23,0
+pooled,CGLPS_vs_SPF,5,49,0
+pooled,UBLS_vs_SPF,1,53,0
+pooled,CGLPS_vs_UBLS,4,50,0
+search_active,CGLPS_vs_SPF,5,31,0
+search_active,UBLS_vs_SPF,1,35,0
+search_active,CGLPS_vs_UBLS,4,32,0
